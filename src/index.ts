@@ -440,16 +440,6 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
 // 4. CHANGE PASSWORD
 // =====================================================
 
-// In src/index.ts - Make sure this is properly placed
-
-// =====================================================
-// CHANGE PASSWORD
-// =====================================================
-// =====================================================
-// CHANGE PASSWORD - FIXED VERSION
-// =====================================================
-// src/index.ts - Updated change password endpoint
-
 app.post('/api/auth/change-password', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -458,7 +448,6 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
 
         console.log('📝 Change password request received');
 
-        // ✅ Try to get session from Better Auth
         let session;
         try {
             session = await auth.api.getSession({
@@ -468,9 +457,7 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
             console.error('❌ Session error:', sessionError);
         }
 
-        // ✅ If session not found, try to get user from the request
         if (!session || !session.user) {
-            // ✅ Try to get user from the session cookie directly
             const cookieHeader = req.headers.cookie;
             if (cookieHeader) {
                 const cookies = cookieHeader.split(';').reduce((acc: any, cookie) => {
@@ -481,7 +468,6 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
 
                 const sessionToken = cookies['better-auth.session'];
                 if (sessionToken) {
-                    // Try to decode the session token
                     try {
                         const parts = sessionToken.split('.');
                         if (parts.length === 3) {
@@ -497,7 +483,6 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
             }
         }
 
-        // ✅ If still no session, return unauthorized
         if (!session || !session.user) {
             console.log('❌ No session found');
             return res.status(401).json({
@@ -540,7 +525,6 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
 
         console.log('🔐 Verifying current password...');
 
-        // ✅ Verify current password
         const bcrypt = require('bcryptjs');
         const isValid = await bcrypt.compare(currentPassword, user.password);
         if (!isValid) {
@@ -552,7 +536,6 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
 
         console.log('✅ Password verified, hashing new password...');
 
-        // ✅ Hash new password
         const hashedPassword = await bcrypt.hash(newPassword, 10);
         await userCollection.updateOne(
             query,
@@ -579,6 +562,7 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
         });
     }
 });
+
 // =====================================================
 // 5. COMPLAINT ROUTES
 // =====================================================
@@ -1293,13 +1277,15 @@ app.patch('/api/connection-wing/applications/:id/status', async (req: Request, r
     }
 });
 
+// =====================================================
+// ASSIGN METER TO APPLICATION (Updated - Creates meter if not exists)
+// =====================================================
 app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Request, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
-        const consumersCollection = db.collection('consumers');
         const { id } = req.params;
         const {
             meterNo,
@@ -1319,19 +1305,12 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
         } = req.body;
 
         console.log(`🔍 Assigning meter to application: ${id}`);
-        console.log(`📦 Meter No: ${meterNo}, Serial: ${meterSerialNo}, Type: ${meterType}`);
+        console.log(`📦 Meter No: ${meterNo}`);
 
         if (!meterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required',
-            });
-        }
-
-        if (initialReading === undefined || initialReading === null) {
-            return res.status(400).json({
-                success: false,
-                message: 'Initial meter reading is required',
             });
         }
 
@@ -1343,57 +1322,88 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
             });
         }
 
-        const existingMeter = await metersCollection.findOne({ meterNo });
+        // ✅ Check if meter already exists
+        const existingMeter = await metersCollection.findOne({
+            meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
+        });
+
         if (existingMeter) {
-            return res.status(400).json({
-                success: false,
-                message: 'Meter number already exists',
-            });
+            // ✅ If meter exists but is not claimed, use it
+            if (!existingMeter.isClaimed) {
+                // Update existing meter
+                await metersCollection.updateOne(
+                    { meterNo },
+                    {
+                        $set: {
+                            consumerName: consumerName || application.applicantName,
+                            email: email || application.email,
+                            mobile: mobile || application.mobile,
+                            address: address || application.address,
+                            consumerType: consumerType || application.connectionType,
+                            feederName: feederName || application.feederName,
+                            status: 'active',
+                            isClaimed: true,
+                            claimedBy: application.consumerId,
+                            claimedAt: new Date(),
+                            userId: application.consumerId,
+                            updatedAt: new Date(),
+                        }
+                    }
+                );
+                console.log(`✅ Existing meter ${meterNo} updated and claimed`);
+            } else {
+                return res.status(400).json({
+                    success: false,
+                    message: `Meter ${meterNo} is already claimed`,
+                });
+            }
+        } else {
+            // ✅ Create new meter
+            const meterData = {
+                meterNo: meterNo.trim(),
+                meterSerialNo: meterSerialNo || '',
+                meterType: meterType || 'single_phase',
+                manufacturer: manufacturer || '',
+                consumerName: consumerName || application.applicantName,
+                address: address || application.address,
+                mobile: mobile || application.mobile,
+                email: email || application.email,
+                consumerType: consumerType || application.connectionType,
+                feederName: feederName || application.feederName,
+                transformerNo: application.transformerNo,
+                status: 'active',
+                initialReading: Number(initialReading) || 0,
+                currentReading: Number(initialReading) || 0,
+                lastReadingDate: new Date(),
+                isClaimed: true,
+                claimedBy: application.consumerId,
+                claimedAt: new Date(),
+                userId: application.consumerId,
+                connectionDate: connectionDate ? new Date(connectionDate) : new Date(),
+                specialNote: specialNote || '',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+
+            await metersCollection.insertOne(meterData);
+            console.log(`✅ New meter ${meterNo} created and assigned`);
         }
 
-        const meterData = {
-            meterNo,
-            meterSerialNo: meterSerialNo || '',
-            meterType: meterType || 'single_phase',
-            manufacturer: manufacturer || '',
-            consumerName: consumerName || application.applicantName,
-            address: address || application.address,
-            mobile: mobile || application.mobile,
-            email: email || application.email,
-            consumerType: consumerType || application.connectionType,
-            status: 'active',
-            initialReading: Number(initialReading),
-            currentReading: Number(initialReading),
-            lastReadingDate: new Date(),
-            feederName: feederName || application.feederName,
-            transformerNo: application.transformerNo,
-            isClaimed: true,
-            claimedBy: application.consumerId,
-            claimedAt: new Date(),
-            userId: application.consumerId,
-            connectionDate: connectionDate ? new Date(connectionDate) : new Date(),
-            specialNote: specialNote || '',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-
-        await metersCollection.insertOne(meterData);
-        console.log(`✅ Meter ${meterNo} created with serial ${meterSerialNo}`);
-
-        const updateData = {
-            status: 'implemented',
-            assignedMeterNo: meterNo,
-            implementedAt: new Date(),
-            connectionWingRemarks: connectionWingRemarks || 'Meter assigned and connection completed',
-            updatedAt: new Date(),
-        };
-
+        // ✅ Update application status
         await applicationsCollection.updateOne(
             { applicationId: id },
-            { $set: updateData }
+            {
+                $set: {
+                    status: 'implemented',
+                    assignedMeterNo: meterNo,
+                    implementedAt: new Date(),
+                    connectionWingRemarks: connectionWingRemarks || 'Meter assigned and connection completed',
+                    updatedAt: new Date(),
+                }
+            }
         );
-        console.log(`✅ Application ${id} marked as implemented`);
 
+        // ✅ Update user's meter list
         if (application.consumerId && application.consumerId !== 'unknown') {
             try {
                 let userQuery;
@@ -1404,63 +1414,22 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
                 }
 
                 const user = await userCollection.findOne(userQuery);
-
                 if (user) {
                     let userMeters = user.meters || [];
-                    let claimedMeters = user.claimedMeters || [];
-
-                    if (user.meterNo && !userMeters.includes(user.meterNo)) {
-                        userMeters.push(user.meterNo);
-                        claimedMeters.push({
-                            meterNo: user.meterNo,
-                            claimedAt: user.createdAt || new Date(),
-                            consumerId: application.consumerId,
-                            consumerName: application.applicantName,
-                            isPrimary: true,
-                            status: 'active'
-                        });
-                    }
-
                     if (!userMeters.includes(meterNo)) {
                         userMeters.push(meterNo);
-                        claimedMeters.push({
-                            meterNo: meterNo,
-                            claimedAt: new Date(),
-                            consumerId: application.consumerId,
-                            consumerName: application.applicantName,
-                            isPrimary: userMeters.length === 1,
-                            status: 'active'
-                        });
+                        await userCollection.updateOne(
+                            userQuery,
+                            {
+                                $set: {
+                                    meterNo: userMeters[0] || meterNo,
+                                    meters: userMeters,
+                                    updatedAt: new Date(),
+                                }
+                            }
+                        );
+                        console.log(`✅ Meter ${meterNo} added to user's list`);
                     }
-
-                    await userCollection.updateOne(
-                        userQuery,
-                        {
-                            $set: {
-                                meterNo: userMeters[0] || meterNo,
-                                meters: userMeters,
-                                claimedMeters: claimedMeters,
-                                feederName: application.feederName,
-                                consumerType: application.connectionType,
-                                updatedAt: new Date(),
-                            }
-                        }
-                    );
-                    console.log(`✅ User ${application.consumerId} updated with meter ${meterNo}`);
-                } else {
-                    await consumersCollection.updateOne(
-                        { meterNo: application.meterNo || meterNo },
-                        {
-                            $set: {
-                                assignedMeterNo: meterNo,
-                                isClaimed: true,
-                                claimedBy: application.consumerId,
-                                claimedAt: new Date(),
-                                updatedAt: new Date(),
-                            }
-                        }
-                    );
-                    console.log(`✅ Consumer record updated for future user registration`);
                 }
             } catch (userError) {
                 console.log('⚠️ Could not update user, but meter was assigned:', userError);
@@ -1471,14 +1440,15 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 
         res.json({
             success: true,
-            message: 'Meter assigned and connection completed successfully. Meter added to consumer\'s account.',
+            message: 'Meter assigned successfully',
             data: {
                 application: updated,
-                meter: meterData,
+                meterNo: meterNo,
             },
         });
+
     } catch (error) {
-        console.error('Assign meter error:', error);
+        console.error('❌ Assign meter error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to assign meter',
@@ -1490,6 +1460,106 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 // =====================================================
 // 8. METER ROUTES
 // =====================================================
+
+// =====================================================
+// GET ALL METERS (For Billing Wings)
+// =====================================================
+// src/index.ts - Update the GET /api/meters/all route
+
+app.get('/api/meters/all', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const metersCollection = db.collection('meters');
+        const userCollection = db.collection('user');
+        const billsCollection = db.collection('bills');
+
+        const meters = await metersCollection
+            .find({})
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        // ✅ Get current month for bill status check
+        const currentMonth = new Date().toLocaleString('default', { month: 'long' });
+        const currentYear = new Date().getFullYear().toString();
+        const currentBillingMonth = `${currentMonth} ${currentYear}`;
+
+        // ✅ Enrich meter data with user info and bill status
+        const enrichedMeters = await Promise.all(
+            meters.map(async (meter) => {
+                let userInfo = {
+                    name: 'N/A',
+                    email: 'N/A',
+                    mobile: 'N/A',
+                    address: 'N/A',
+                    isRegistered: false,
+                };
+
+                if (meter.isClaimed && meter.claimedBy) {
+                    try {
+                        let query;
+                        try {
+                            query = { _id: new ObjectId(meter.claimedBy) };
+                        } catch {
+                            query = { _id: meter.claimedBy };
+                        }
+
+                        const user = await userCollection.findOne(query);
+                        if (user) {
+                            userInfo = {
+                                name: user.name || meter.consumerName || 'N/A',
+                                email: user.email || 'N/A',
+                                mobile: user.mobile || 'N/A',
+                                address: user.address || meter.address || 'N/A',
+                                isRegistered: true,
+                            };
+                        }
+                    } catch (error) {
+                        console.error(`Error fetching user for meter ${meter.meterNo}:`, error);
+                    }
+                }
+
+                // ✅ Check if bill already generated for current month
+                let billStatus = 'pending';
+                let existingBill = null;
+
+                try {
+                    existingBill = await billsCollection.findOne({
+                        meterNo: meter.meterNo,
+                        billingMonth: currentBillingMonth,
+                    });
+
+                    if (existingBill) {
+                        billStatus = existingBill.status || 'generated';
+                    }
+                } catch (error) {
+                    console.error(`Error checking bill for meter ${meter.meterNo}:`, error);
+                }
+
+                return {
+                    ...meter,
+                    userInfo,
+                    billStatus, // ✅ Add bill status
+                    billId: existingBill?.billId || null,
+                    billAmount: existingBill?.grandTotal || existingBill?.totalAmount || null,
+                };
+            })
+        );
+
+        res.json({
+            success: true,
+            data: enrichedMeters,
+            total: enrichedMeters.length,
+        });
+
+    } catch (error) {
+        console.error('❌ Get all meters error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch meters',
+        });
+    }
+});
+
 
 app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Response) => {
     try {
@@ -2487,14 +2557,37 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
     }
 });
 
+// =====================================================
+// GENERATE BILL (Updated - Meter Based)
+// =====================================================
+// =====================================================
+// GENERATE BILL (Updated - Meter Based)
+// ✅ Any meter can generate bill (claimed or unclaimed)
+// ✅ If unclaimed → consumer info = N/A
+// ✅ If claimed but unregistered → info from meter
+// ✅ If claimed and registered → info from user
+// =====================================================
+// =====================================================
+// GENERATE BILL (Updated - Meter Based)
+// ✅ Any meter can generate bill (claimed or unclaimed)
+// ✅ If unclaimed → consumer info = N/A
+// ✅ If claimed but unregistered → info from meter
+// ✅ If claimed and registered → info from user
+// =====================================================
+// =====================================================
+// GENERATE BILL (Updated - Meter Based)
+// ✅ Any meter can generate bill (claimed or unclaimed)
+// ✅ If unclaimed → consumer info = N/A
+// ✅ If claimed but unregistered → info from meter
+// ✅ If claimed and registered → info from user
+// ✅ ALL amounts are stored as Numbers (NOT strings)
+// =====================================================
 app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
     try {
         await connectDB();
 
         const {
             meterNo,
-            consumerName,
-            consumerType,
             previousReading,
             currentReading,
             unitsConsumed,
@@ -2505,18 +2598,129 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
             unpaidAmount,
             lateFee,
             grandTotal,
-            consumerId,
         } = req.body;
 
-        if (!meterNo || !consumerName || !previousReading || !currentReading || !billingMonth || !dueDate) {
+        console.log('📦 Received bill generation request:', {
+            meterNo,
+            previousReading,
+            currentReading,
+            unitsConsumed,
+            billingMonth,
+            dueDate,
+        });
+
+        // ✅ Validation - Check required fields
+        if (!meterNo) {
             return res.status(400).json({
                 success: false,
-                message: 'All required fields must be filled',
+                message: 'Meter number is required',
             });
         }
 
+        if (!billingMonth) {
+            return res.status(400).json({
+                success: false,
+                message: 'Billing month is required',
+            });
+        }
+
+        if (!dueDate) {
+            return res.status(400).json({
+                success: false,
+                message: 'Due date is required',
+            });
+        }
+
+        if (previousReading === undefined || previousReading === null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Previous reading is required',
+            });
+        }
+
+        if (currentReading === undefined || currentReading === null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current reading is required',
+            });
+        }
+
+        const metersCollection = db.collection('meters');
+        const userCollection = db.collection('user');
         const billsCollection = db.collection('bills');
 
+        // ✅ 1. Get meter info
+        const meter = await metersCollection.findOne({
+            meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
+        });
+
+        if (!meter) {
+            return res.status(404).json({
+                success: false,
+                message: 'Meter not found',
+            });
+        }
+
+        console.log(`🔍 Meter found: ${meter.meterNo}, isClaimed: ${meter.isClaimed}`);
+
+        // ✅ 2. Get consumer info from meter
+        let consumerName = 'N/A';
+        let consumerEmail = 'N/A';
+        let consumerMobile = 'N/A';
+        let consumerAddress = 'N/A';
+        let consumerType = meter.consumerType || 'residential';
+        let consumerId = null;
+        let isRegisteredUser = false;
+
+        // ✅ Check if meter is claimed
+        if (meter.isClaimed && meter.claimedBy) {
+            try {
+                let query;
+                try {
+                    query = { _id: new ObjectId(meter.claimedBy) };
+                } catch {
+                    query = { _id: meter.claimedBy };
+                }
+
+                const user = await userCollection.findOne(query);
+
+                if (user) {
+                    // ✅ Claimed + Registered User → Use user info
+                    consumerName = user.name || meter.consumerName || 'N/A';
+                    consumerEmail = user.email || 'N/A';
+                    consumerMobile = user.mobile || 'N/A';
+                    consumerAddress = user.address || meter.address || 'N/A';
+                    consumerId = user._id.toString();
+                    consumerType = user.consumerType || meter.consumerType || 'residential';
+                    isRegisteredUser = true;
+                    console.log(`✅ Meter ${meterNo} is claimed by registered user: ${consumerName}`);
+                } else {
+                    // ✅ Claimed + Unregistered User → Use meter info
+                    consumerName = meter.consumerName || 'N/A';
+                    consumerEmail = meter.email || 'N/A';
+                    consumerMobile = meter.mobile || 'N/A';
+                    consumerAddress = meter.address || 'N/A';
+                    console.log(`⚠️ Meter ${meterNo} is claimed but user not found in user collection`);
+                }
+            } catch (error) {
+                console.error('Error fetching user:', error);
+                // Fallback to meter info
+                consumerName = meter.consumerName || 'N/A';
+                consumerEmail = meter.email || 'N/A';
+                consumerMobile = meter.mobile || 'N/A';
+                consumerAddress = meter.address || 'N/A';
+            }
+        } else {
+            // ✅ Meter is NOT claimed → Set N/A
+            consumerName = 'N/A';
+            consumerEmail = 'N/A';
+            consumerMobile = 'N/A';
+            consumerAddress = 'N/A';
+            isRegisteredUser = false;
+            console.log(`⚪ Meter ${meterNo} is not claimed. Bill will be generated with N/A.`);
+        }
+
+        // ✅ 3. Check if bill already exists for this meter and month
         const existingBill = await billsCollection.findOne({
             meterNo,
             billingMonth,
@@ -2525,96 +2729,83 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
         if (existingBill) {
             return res.status(400).json({
                 success: false,
-                message: 'Bill already exists for this meter and month',
+                message: `Bill already exists for meter ${meterNo} for ${billingMonth}`,
             });
         }
 
+        // ✅ 4. Generate bill ID
         const billId = `B-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999) + 1).padStart(3, '0')}`;
 
+        // ✅ 5. Create bill - ALL numbers forced to Number()
         const newBill = {
             billId,
             meterNo,
             consumerName,
+            consumerEmail,
+            consumerMobile,
+            consumerAddress,
             consumerType,
+            consumerId,
+
+            // ✅ CRITICAL: All numeric fields forced to Number()
             previousReading: Number(previousReading),
             currentReading: Number(currentReading),
             unitsConsumed: Number(unitsConsumed),
             ratePerUnit: Number(ratePerUnit),
             totalAmount: Number(totalAmount),
-            billingMonth,
-            dueDate,
             unpaidAmount: Number(unpaidAmount) || 0,
             lateFee: Number(lateFee) || 0,
             grandTotal: Number(grandTotal) || Number(totalAmount),
+
+            billingMonth,
+            dueDate,
             status: 'unpaid',
-            consumerId: consumerId || 'unknown',
             isPaid: false,
             paidAt: null,
             paymentMethod: null,
+            isRegisteredUser,
+            isClaimed: meter.isClaimed,
             createdAt: new Date(),
             updatedAt: new Date(),
         };
 
         const result = await billsCollection.insertOne(newBill);
 
-        if (consumerId && consumerId !== 'unknown') {
-            try {
-                const userCollection = db.collection('user');
-                let query;
-                try {
-                    query = { _id: new ObjectId(consumerId) };
-                } catch {
-                    query = { _id: consumerId };
+        // ✅ 6. Update meter with latest reading
+        await metersCollection.updateOne(
+            { meterNo },
+            {
+                $set: {
+                    previousReading: Number(previousReading),
+                    currentReading: Number(currentReading),
+                    lastBillingMonth: billingMonth,
+                    updatedAt: new Date(),
                 }
-
-                const userExists = await userCollection.findOne(query);
-                if (userExists) {
-                    await userCollection.updateOne(
-                        query,
-                        {
-                            $set: {
-                                lastBillingMonth: billingMonth,
-                                lastReading: Number(currentReading),
-                                updatedAt: new Date(),
-                            },
-                        }
-                    );
-                }
-            } catch (updateError) {
-                console.log('⚠️ Could not update user, but bill was created:', updateError);
             }
-        }
-
-        try {
-            const metersCollection = db.collection('meters');
-            const meterExists = await metersCollection.findOne({ meterNo });
-            if (meterExists) {
-                await metersCollection.updateOne(
-                    { meterNo },
-                    {
-                        $set: {
-                            previousReading: Number(previousReading),
-                            currentReading: Number(currentReading),
-                            lastBillingMonth: billingMonth,
-                            updatedAt: new Date(),
-                        },
-                    }
-                );
-            }
-        } catch (meterError) {
-            console.log('⚠️ Could not update meter, but bill was created:', meterError);
-        }
+        );
 
         const savedBill = await billsCollection.findOne({ _id: result.insertedId });
+
+        console.log(`✅ Bill ${billId} generated for meter ${meterNo}`);
+        console.log(`📊 Consumer: ${consumerName} (${isRegisteredUser ? 'Registered' : meter.isClaimed ? 'Unregistered' : 'N/A'})`);
+        console.log(`💰 Amount: ৳${Number(newBill.grandTotal).toLocaleString()}`);
 
         res.status(201).json({
             success: true,
             message: 'Bill generated successfully',
             data: savedBill,
+            consumerInfo: {
+                isRegisteredUser,
+                isClaimed: meter.isClaimed,
+                consumerName,
+                consumerEmail,
+                consumerMobile,
+                consumerAddress,
+            }
         });
 
     } catch (error) {
-        console.error('Generate bill error:', error);
+        console.error('❌ Generate bill error:', error);
         res.status(500).json({
             success: false,
             message: 'Failed to generate bill',
@@ -2622,7 +2813,6 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 10. CONSUMER ROUTES (Billing)
 // =====================================================
@@ -2717,133 +2907,6 @@ app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response
         res.status(500).json({
             success: false,
             message: 'Failed to fetch consumer',
-        });
-    }
-});
-
-app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response) => {
-    try {
-        await connectDB();
-
-        const {
-            name,
-            email,
-            mobile,
-            nidNo,
-            address,
-            consumerType,
-            feederName,
-            meterNo,
-            isActive,
-        } = req.body;
-
-        if (!name || !email || !mobile || !nidNo || !address || !meterNo) {
-            return res.status(400).json({
-                success: false,
-                message: 'Name, email, mobile, NID, address, and meter number are required',
-            });
-        }
-
-        const consumersCollection = db.collection('consumers');
-        const metersCollection = db.collection('meters');
-
-        const existingConsumer = await consumersCollection.findOne({
-            $or: [
-                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
-                { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
-                { nidNo: { $regex: new RegExp(`^${nidNo}$`, 'i') } },
-                { meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') } }
-            ]
-        });
-
-        if (existingConsumer) {
-            let duplicateField = '';
-            if (existingConsumer.email === email) duplicateField = 'email';
-            else if (existingConsumer.mobile === mobile) duplicateField = 'mobile';
-            else if (existingConsumer.nidNo === nidNo) duplicateField = 'NID';
-            else if (existingConsumer.meterNo === meterNo) duplicateField = 'meter';
-
-            return res.status(400).json({
-                success: false,
-                message: `${duplicateField} already exists in the system`,
-            });
-        }
-
-        const meter = await metersCollection.findOne({
-            meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
-        });
-
-        if (!meter) {
-            return res.status(404).json({
-                success: false,
-                message: 'Meter not found. Please add the meter first.',
-            });
-        }
-
-        if (meter.isClaimed) {
-            return res.status(400).json({
-                success: false,
-                message: 'Meter is already claimed. Please add a different meter.',
-            });
-        }
-
-        const newConsumer = {
-            name,
-            email,
-            mobile,
-            nidNo,
-            address,
-            consumerType: consumerType || 'residential',
-            feederName: feederName || '',
-            meterNo,
-            isActive: isActive !== undefined ? isActive : true,
-            isClaimed: false,
-            claimedBy: null,
-            claimedAt: null,
-            isRegistered: false,
-            registeredBy: null,
-            registeredAt: null,
-            userId: null,
-            role: 'consumer',
-            createdAt: new Date(),
-            updatedAt: new Date(),
-        };
-
-        const result = await consumersCollection.insertOne(newConsumer);
-        console.log(`✅ Consumer added: ${name} with meter ${meterNo}`);
-
-        await metersCollection.updateOne(
-            { meterNo },
-            {
-                $set: {
-                    consumerName: name,
-                    email: email,
-                    mobile: mobile,
-                    address: address,
-                    consumerType: consumerType || 'residential',
-                    feederName: feederName || '',
-                    status: 'pending_claim',
-                    isClaimed: false,
-                    updatedAt: new Date(),
-                }
-            }
-        );
-
-        res.status(201).json({
-            success: true,
-            message: 'Consumer added successfully',
-            data: {
-                ...newConsumer,
-                _id: result.insertedId,
-            },
-        });
-
-    } catch (error) {
-        console.error('Add consumer error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to add consumer',
-            error: error instanceof Error ? error.message : 'Unknown error',
         });
     }
 });
