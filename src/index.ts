@@ -1,4 +1,4 @@
-// src/index.ts - Complete Backend with all routes
+// src/index.ts - Complete Backend with all routes (FULLY UPDATED)
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -6,7 +6,6 @@ import { MongoClient, Db, ObjectId } from 'mongodb';
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from 'better-auth/adapters/mongodb';
 import { toNodeHandler } from 'better-auth/node';
-import bcrypt from 'bcryptjs';
 
 dotenv.config();
 
@@ -59,6 +58,84 @@ const generateAppId = (): string => {
     const year = new Date().getFullYear();
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     return `APP-${year}-${random}`;
+};
+
+// =====================================================
+// TRANSACTION HELPER
+// =====================================================
+
+const createTransaction = async (
+    type: 'connection_fee' | 'bill_payment' | 'refund' | 'adjustment',
+    category: string,
+    amount: number,
+    status: 'completed' | 'pending' | 'failed' | 'refunded',
+    paymentMethod: 'stripe' | 'cash' | 'bank_transfer' | 'mobile_banking',
+    consumerName: string,
+    meterNo: string,
+    referenceId: string,
+    description: string
+) => {
+    try {
+        const transactionsCollection = db.collection('transactions');
+        const transactionId = `TXN-${Date.now()}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
+
+        const transaction = {
+            transactionId,
+            type,
+            category,
+            amount,
+            status,
+            paymentMethod,
+            consumerName,
+            meterNo,
+            referenceId,
+            description,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            completedAt: status === 'completed' ? new Date() : null,
+        };
+
+        await transactionsCollection.insertOne(transaction);
+        console.log(`✅ Transaction created: ${transactionId} for ${referenceId}`);
+        return transaction;
+    } catch (error) {
+        console.error('❌ Error creating transaction:', error);
+        return null;
+    }
+};
+
+// =====================================================
+// INITIALIZE COLLECTIONS
+// =====================================================
+
+const initializeCollections = async () => {
+    try {
+        await connectDB();
+        const collections = await db.listCollections().toArray();
+        const collectionNames = collections.map(c => c.name);
+
+        const collectionsToCreate = [
+            'transactions',
+            'payment_sessions',
+            'bills',
+            'consumers',
+            'meters',
+            'complaints',
+            'connection_applications',
+            'substations'
+        ];
+
+        for (const name of collectionsToCreate) {
+            if (!collectionNames.includes(name)) {
+                await db.createCollection(name);
+                console.log(`✅ ${name} collection created`);
+            }
+        }
+
+        console.log('✅ All collections initialized');
+    } catch (error) {
+        console.error('Error initializing collections:', error);
+    }
 };
 
 // =====================================================
@@ -124,6 +201,7 @@ const initAuth = async () => {
                         default: 'consumer',
                     },
                     isActive: { type: 'boolean', default: true },
+                    address: { type: 'string', required: false },
                 },
             },
             trustedOrigins: ['http://localhost:3000', 'http://localhost:5000'],
@@ -225,7 +303,284 @@ app.use('/api/auth', async (req: Request, res: Response, next: NextFunction) => 
 });
 
 // =====================================================
-// 3. COMPLAINT ROUTES
+// 3. CUSTOM SIGN-UP WITH CONSUMER SYNC
+// =====================================================
+
+app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const consumersCollection = db.collection('consumers');
+        const { email, mobile, nidNo, name, password, role, meterNo, feederName, consumerType, address } = req.body;
+
+        console.log('📝 Registration request:', { email, mobile, nidNo, name });
+
+        const existingUser = await userCollection.findOne({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
+                { nidNo: { $regex: new RegExp(`^${nidNo}$`, 'i') } }
+            ]
+        });
+
+        if (existingUser) {
+            let duplicateField = '';
+            if (existingUser.email === email) duplicateField = 'Email';
+            else if (existingUser.mobile === mobile) duplicateField = 'Mobile';
+            else if (existingUser.nidNo === nidNo) duplicateField = 'NID';
+
+            return res.status(400).json({
+                success: false,
+                message: `${duplicateField} already exists in the system`,
+                error: {
+                    field: duplicateField.toLowerCase(),
+                    message: `${duplicateField} already exists`
+                }
+            });
+        }
+
+        const response = await auth.api.signUpEmail({
+            body: {
+                email,
+                password,
+                name,
+                mobile,
+                nidNo,
+                role: role || 'consumer',
+                isActive: true,
+                meterNo: meterNo || '',
+                feederName: feederName || '',
+                consumerType: consumerType || 'residential',
+                address: address || '',
+            },
+            headers: req.headers,
+        });
+
+        if (!response) {
+            throw new Error('Failed to create user');
+        }
+
+        console.log('✅ User registered successfully:', response.user.id);
+
+        const userId = response.user.id;
+
+        let consumer = await consumersCollection.findOne({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
+                { nidNo: { $regex: new RegExp(`^${nidNo}$`, 'i') } }
+            ]
+        });
+
+        if (consumer) {
+            await consumersCollection.updateOne(
+                { _id: consumer._id },
+                {
+                    $set: {
+                        userId: userId,
+                        isRegistered: true,
+                        registeredBy: userId,
+                        registeredAt: new Date(),
+                        isActive: true,
+                        name: name,
+                        email: email,
+                        mobile: mobile,
+                        nidNo: nidNo,
+                        address: address || consumer.address,
+                        role: 'consumer',
+                        updatedAt: new Date(),
+                    }
+                }
+            );
+            console.log(`✅ Existing consumer updated with user ID: ${userId}`);
+        } else {
+            const newConsumer = {
+                name: name,
+                email: email,
+                mobile: mobile,
+                nidNo: nidNo,
+                address: address || '',
+                consumerType: consumerType || 'residential',
+                feederName: feederName || '',
+                meterNo: meterNo || '',
+                isActive: true,
+                isClaimed: false,
+                claimedBy: null,
+                claimedAt: null,
+                isRegistered: true,
+                registeredBy: userId,
+                registeredAt: new Date(),
+                userId: userId,
+                role: 'consumer',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+
+            await consumersCollection.insertOne(newConsumer);
+            console.log(`✅ New consumer created for user: ${userId}`);
+        }
+
+        res.status(201).json({
+            success: true,
+            message: 'Registration successful',
+            data: response,
+        });
+
+    } catch (error: any) {
+        console.error('❌ Registration error:', error);
+        res.status(500).json({
+            success: false,
+            message: error.message || 'Registration failed',
+            error: error.message,
+        });
+    }
+});
+
+// =====================================================
+// 4. CHANGE PASSWORD
+// =====================================================
+
+// In src/index.ts - Make sure this is properly placed
+
+// =====================================================
+// CHANGE PASSWORD
+// =====================================================
+// =====================================================
+// CHANGE PASSWORD - FIXED VERSION
+// =====================================================
+// src/index.ts - Updated change password endpoint
+
+app.post('/api/auth/change-password', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { currentPassword, newPassword } = req.body;
+
+        console.log('📝 Change password request received');
+
+        // ✅ Try to get session from Better Auth
+        let session;
+        try {
+            session = await auth.api.getSession({
+                headers: req.headers,
+            });
+        } catch (sessionError) {
+            console.error('❌ Session error:', sessionError);
+        }
+
+        // ✅ If session not found, try to get user from the request
+        if (!session || !session.user) {
+            // ✅ Try to get user from the session cookie directly
+            const cookieHeader = req.headers.cookie;
+            if (cookieHeader) {
+                const cookies = cookieHeader.split(';').reduce((acc: any, cookie) => {
+                    const [key, value] = cookie.trim().split('=');
+                    acc[key] = value;
+                    return acc;
+                }, {});
+
+                const sessionToken = cookies['better-auth.session'];
+                if (sessionToken) {
+                    // Try to decode the session token
+                    try {
+                        const parts = sessionToken.split('.');
+                        if (parts.length === 3) {
+                            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+                            if (payload.user && payload.user.id) {
+                                session = { user: payload.user };
+                            }
+                        }
+                    } catch (decodeError) {
+                        console.error('❌ Decode error:', decodeError);
+                    }
+                }
+            }
+        }
+
+        // ✅ If still no session, return unauthorized
+        if (!session || !session.user) {
+            console.log('❌ No session found');
+            return res.status(401).json({
+                success: false,
+                message: 'Unauthorized. Please login again.',
+            });
+        }
+
+        const userId = session.user.id;
+        console.log(`👤 User ID: ${userId}`);
+
+        if (!currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password and new password are required',
+            });
+        }
+
+        if (newPassword.length < 8) {
+            return res.status(400).json({
+                success: false,
+                message: 'New password must be at least 8 characters',
+            });
+        }
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const user = await userCollection.findOne(query);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        console.log('🔐 Verifying current password...');
+
+        // ✅ Verify current password
+        const bcrypt = require('bcryptjs');
+        const isValid = await bcrypt.compare(currentPassword, user.password);
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                message: 'Current password is incorrect',
+            });
+        }
+
+        console.log('✅ Password verified, hashing new password...');
+
+        // ✅ Hash new password
+        const hashedPassword = await bcrypt.hash(newPassword, 10);
+        await userCollection.updateOne(
+            query,
+            {
+                $set: {
+                    password: hashedPassword,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        console.log('✅ Password updated successfully');
+
+        res.json({
+            success: true,
+            message: 'Password updated successfully',
+        });
+    } catch (error) {
+        console.error('❌ Change password error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to change password',
+            error: error instanceof Error ? error.message : 'Unknown error',
+        });
+    }
+});
+// =====================================================
+// 5. COMPLAINT ROUTES
 // =====================================================
 
 app.post('/api/complaints', async (req: Request, res: Response) => {
@@ -510,7 +865,7 @@ app.delete('/api/complaints/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 4. CONNECTION APPLICATION ROUTES
+// 6. CONNECTION APPLICATION ROUTES
 // =====================================================
 
 app.post('/api/connection-applications', async (req: Request, res: Response) => {
@@ -851,7 +1206,7 @@ app.delete('/api/connection-applications/:id', async (req: Request, res: Respons
 });
 
 // =====================================================
-// 5. CONNECTION WING ROUTES
+// 7. CONNECTION WING ROUTES
 // =====================================================
 
 app.get('/api/connection-wing/applications', async (req: Request, res: Response) => {
@@ -944,11 +1299,27 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
         const applicationsCollection = db.collection('connection_applications');
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
+        const consumersCollection = db.collection('consumers');
         const { id } = req.params;
-        const { meterNo, initialReading, connectionWingRemarks } = req.body;
+        const {
+            meterNo,
+            meterSerialNo,
+            meterType,
+            manufacturer,
+            feederName,
+            connectionDate,
+            consumerType,
+            initialReading,
+            specialNote,
+            consumerName,
+            address,
+            mobile,
+            email,
+            connectionWingRemarks
+        } = req.body;
 
         console.log(`🔍 Assigning meter to application: ${id}`);
-        console.log(`📦 Meter No: ${meterNo}, Initial Reading: ${initialReading}`);
+        console.log(`📦 Meter No: ${meterNo}, Serial: ${meterSerialNo}, Type: ${meterType}`);
 
         if (!meterNo) {
             return res.status(400).json({
@@ -982,23 +1353,32 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 
         const meterData = {
             meterNo,
-            consumerName: application.applicantName,
-            address: application.address,
-            mobile: application.mobile,
-            email: application.email,
-            consumerType: application.connectionType,
+            meterSerialNo: meterSerialNo || '',
+            meterType: meterType || 'single_phase',
+            manufacturer: manufacturer || '',
+            consumerName: consumerName || application.applicantName,
+            address: address || application.address,
+            mobile: mobile || application.mobile,
+            email: email || application.email,
+            consumerType: consumerType || application.connectionType,
             status: 'active',
             initialReading: Number(initialReading),
             currentReading: Number(initialReading),
             lastReadingDate: new Date(),
-            feederName: application.feederName,
+            feederName: feederName || application.feederName,
             transformerNo: application.transformerNo,
+            isClaimed: true,
+            claimedBy: application.consumerId,
+            claimedAt: new Date(),
+            userId: application.consumerId,
+            connectionDate: connectionDate ? new Date(connectionDate) : new Date(),
+            specialNote: specialNote || '',
             createdAt: new Date(),
             updatedAt: new Date(),
         };
 
         await metersCollection.insertOne(meterData);
-        console.log(`✅ Meter ${meterNo} created`);
+        console.log(`✅ Meter ${meterNo} created with serial ${meterSerialNo}`);
 
         const updateData = {
             status: 'implemented',
@@ -1016,16 +1396,72 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 
         if (application.consumerId && application.consumerId !== 'unknown') {
             try {
-                await userCollection.updateOne(
-                    { _id: new ObjectId(application.consumerId) },
-                    {
-                        $set: {
-                            meterNo: meterNo,
-                            feederName: application.feederName,
-                        }
+                let userQuery;
+                try {
+                    userQuery = { _id: new ObjectId(application.consumerId) };
+                } catch {
+                    userQuery = { _id: application.consumerId };
+                }
+
+                const user = await userCollection.findOne(userQuery);
+
+                if (user) {
+                    let userMeters = user.meters || [];
+                    let claimedMeters = user.claimedMeters || [];
+
+                    if (user.meterNo && !userMeters.includes(user.meterNo)) {
+                        userMeters.push(user.meterNo);
+                        claimedMeters.push({
+                            meterNo: user.meterNo,
+                            claimedAt: user.createdAt || new Date(),
+                            consumerId: application.consumerId,
+                            consumerName: application.applicantName,
+                            isPrimary: true,
+                            status: 'active'
+                        });
                     }
-                );
-                console.log(`✅ User ${application.consumerId} updated with meter ${meterNo}`);
+
+                    if (!userMeters.includes(meterNo)) {
+                        userMeters.push(meterNo);
+                        claimedMeters.push({
+                            meterNo: meterNo,
+                            claimedAt: new Date(),
+                            consumerId: application.consumerId,
+                            consumerName: application.applicantName,
+                            isPrimary: userMeters.length === 1,
+                            status: 'active'
+                        });
+                    }
+
+                    await userCollection.updateOne(
+                        userQuery,
+                        {
+                            $set: {
+                                meterNo: userMeters[0] || meterNo,
+                                meters: userMeters,
+                                claimedMeters: claimedMeters,
+                                feederName: application.feederName,
+                                consumerType: application.connectionType,
+                                updatedAt: new Date(),
+                            }
+                        }
+                    );
+                    console.log(`✅ User ${application.consumerId} updated with meter ${meterNo}`);
+                } else {
+                    await consumersCollection.updateOne(
+                        { meterNo: application.meterNo || meterNo },
+                        {
+                            $set: {
+                                assignedMeterNo: meterNo,
+                                isClaimed: true,
+                                claimedBy: application.consumerId,
+                                claimedAt: new Date(),
+                                updatedAt: new Date(),
+                            }
+                        }
+                    );
+                    console.log(`✅ Consumer record updated for future user registration`);
+                }
             } catch (userError) {
                 console.log('⚠️ Could not update user, but meter was assigned:', userError);
             }
@@ -1035,7 +1471,7 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 
         res.json({
             success: true,
-            message: 'Meter assigned and connection completed successfully',
+            message: 'Meter assigned and connection completed successfully. Meter added to consumer\'s account.',
             data: {
                 application: updated,
                 meter: meterData,
@@ -1052,10 +1488,9 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 });
 
 // =====================================================
-// 6. METER ROUTES
+// 8. METER ROUTES
 // =====================================================
 
-// ✅ CHECK METER ASSIGNMENT
 app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1124,7 +1559,6 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
     }
 });
 
-// ✅ CHECK METER AVAILABILITY
 app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1183,13 +1617,13 @@ app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Res
     }
 });
 
-// ✅ ADD METER
 app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) => {
     try {
         await connectDB();
 
         const {
             meterNo,
+            meterSerialNo,
             meterType,
             manufacturer,
             feederName,
@@ -1225,6 +1659,7 @@ app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) =
 
         const newMeter = {
             meterNo: meterNo.trim(),
+            meterSerialNo: meterSerialNo || '',
             meterType: meterType || 'single_phase',
             manufacturer: manufacturer || '',
             consumerName: consumerName || 'Pending',
@@ -1301,7 +1736,6 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
 
         console.log(`🔍 Searching for meter: ${meterNo}`);
 
-        // ✅ First check in meters collection
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
@@ -1313,7 +1747,6 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ Check if meter is already claimed
         if (meter.isClaimed) {
             return res.status(400).json({
                 success: false,
@@ -1321,12 +1754,10 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ Check if there's a consumer associated with this meter
         const consumer = await consumersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
 
-        // ✅ Return meter with consumer info if available
         const responseData = {
             ...meter,
             consumerName: consumer?.name || meter.consumerName || 'Pending',
@@ -1352,7 +1783,6 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
     }
 });
 
-
 app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1371,7 +1801,6 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
             });
         }
 
-        // ✅ Check in meters collection
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
@@ -1383,9 +1812,7 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
             });
         }
 
-        // ✅ Check if meter is already claimed
         if (meter.isClaimed) {
-            // ✅ Check if claimed by this user
             if (meter.claimedBy === userId) {
                 return res.json({
                     success: true,
@@ -1406,7 +1833,6 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
             });
         }
 
-        // ✅ Check if there's a consumer associated
         const consumer = await consumersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
@@ -1435,8 +1861,6 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
         });
     }
 });
-
-
 
 app.post('/api/meters/claim', async (req: Request, res: Response) => {
     try {
@@ -1519,7 +1943,6 @@ app.post('/api/meters/claim', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ CLAIM METER FOR CONSUMER - UPDATED with multiple meters support
 app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1535,7 +1958,6 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             });
         }
 
-        // ✅ Find the consumer
         const consumer = await consumersCollection.findOne({ meterNo });
         if (!consumer) {
             return res.status(404).json({
@@ -1551,7 +1973,6 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             });
         }
 
-        // ✅ Find the user
         let userQuery;
         try {
             userQuery = { _id: new ObjectId(userId) };
@@ -1567,11 +1988,9 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             });
         }
 
-        // ✅ Get user's existing meters
         let userMeters = user.meters || [];
         let claimedMeters = user.claimedMeters || [];
 
-        // ✅ Check if meter already claimed by this user
         if (userMeters.includes(meterNo)) {
             return res.status(400).json({
                 success: false,
@@ -1579,7 +1998,6 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             });
         }
 
-        // ✅ Update consumer - mark as claimed
         await consumersCollection.updateOne(
             { meterNo },
             {
@@ -1596,29 +2014,26 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             }
         );
 
-        // ✅ Add meter to user's meter list
         userMeters.push(meterNo);
         claimedMeters.push({
             meterNo: meterNo,
             claimedAt: new Date(),
             consumerId: consumer._id.toString(),
             consumerName: consumer.name,
-            isPrimary: userMeters.length === 1, // First meter is primary
+            isPrimary: userMeters.length === 1,
             status: 'active'
         });
 
-        // ✅ Update user - keep existing data, add new meter
         await userCollection.updateOne(
             userQuery,
             {
                 $set: {
-                    // ✅ Only update name/email if first time (keep existing data)
                     name: user.name || consumer.name,
                     email: user.email || consumer.email,
                     mobile: user.mobile || consumer.mobile,
                     nidNo: user.nidNo || consumer.nidNo,
                     address: user.address || consumer.address,
-                    meterNo: userMeters[0] || meterNo, // Keep first meter as primary
+                    meterNo: userMeters[0] || meterNo,
                     meters: userMeters,
                     claimedMeters: claimedMeters,
                     feederName: user.feederName || consumer.feederName,
@@ -1630,7 +2045,6 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             }
         );
 
-        // ✅ Update meter - mark as claimed
         await metersCollection.updateOne(
             { meterNo },
             {
@@ -1699,7 +2113,6 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ Check if meter belongs to user
         if (!user.meters || !user.meters.includes(meterNo)) {
             return res.status(400).json({
                 success: false,
@@ -1707,7 +2120,6 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ Update primary meter
         await userCollection.updateOne(
             query,
             {
@@ -1718,7 +2130,6 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
             }
         );
 
-        // ✅ Update claimedMeters isPrimary flag
         const claimedMeters = user.claimedMeters.map((m: any) => ({
             ...m,
             isPrimary: m.meterNo === meterNo
@@ -1751,7 +2162,6 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ GET USER'S ALL METERS
 app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1777,12 +2187,10 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
         const meters = user.meters || [];
         const claimedMeters = user.claimedMeters || [];
 
-        // ✅ Get full meter details
         const meterDetails = await metersCollection
             .find({ meterNo: { $in: meters } })
             .toArray();
 
-        // ✅ Sort meters with primary first
         const sortedMeters = meterDetails.sort((a, b) => {
             if (a.meterNo === user.meterNo) return -1;
             if (b.meterNo === user.meterNo) return 1;
@@ -1808,7 +2216,6 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ GET CONSUMER STATUS
 app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1843,13 +2250,14 @@ app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) =>
     }
 });
 
-// ✅ CHECK UNIQUE FIELD
 app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
         const { field, value } = req.query;
+
+        console.log(`🔍 Checking uniqueness: ${field} = ${value}`);
 
         if (!field || !value) {
             return res.status(400).json({
@@ -1913,10 +2321,9 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 7. BILLING WINGS ROUTES
+// 9. BILLING WINGS ROUTES
 // =====================================================
 
-// ✅ GET ALL BILLS
 app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1961,7 +2368,6 @@ app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ GET BILLS BY CONSUMER
 app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1986,7 +2392,6 @@ app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Res
     }
 });
 
-// ✅ GET BILLS BY METER
 app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2011,7 +2416,6 @@ app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response)
     }
 });
 
-// ✅ GET SINGLE BILL
 app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2040,7 +2444,6 @@ app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ PAY BILL
 app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2084,7 +2487,6 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
     }
 });
 
-// ✅ GENERATE BILL
 app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2222,30 +2624,49 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 8. CONSUMER ROUTES (Billing)
+// 10. CONSUMER ROUTES (Billing)
 // =====================================================
 
-// ✅ GET ALL CONSUMERS
 app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
 
         const consumers = await consumersCollection
-            .find({})
+            .find({
+                role: 'consumer',
+                isActive: true
+            })
             .sort({ name: 1 })
             .toArray();
 
-        console.log(`👥 Found ${consumers.length} consumers`);
+        console.log(`👥 Found ${consumers.length} active consumers`);
 
-        const processedConsumers = consumers.map((consumer: any) => ({
-            ...consumer,
-            _id: consumer._id ? consumer._id.toString() : null,
-            id: consumer._id ? consumer._id.toString() : null,
-            isClaimed: consumer.isClaimed || false,
-            isRegistered: consumer.isRegistered || false,
-            status: consumer.isRegistered ? 'Registered' : 'Pending',
-        }));
+        const processedConsumers = consumers.map((consumer: any) => {
+            let status = 'Pending Registration';
+            if (consumer.isRegistered && consumer.isClaimed) {
+                status = 'Registered & Claimed';
+            } else if (consumer.isRegistered && !consumer.isClaimed) {
+                status = 'Registered (Not Claimed)';
+            } else if (!consumer.isRegistered && consumer.isClaimed) {
+                status = 'Claimed (Not Registered)';
+            } else {
+                status = 'Pending Registration';
+            }
+
+            return {
+                ...consumer,
+                _id: consumer._id ? consumer._id.toString() : null,
+                id: consumer._id ? consumer._id.toString() : null,
+                isClaimed: consumer.isClaimed || false,
+                isRegistered: consumer.isRegistered || false,
+                hasMeter: !!(consumer.meterNo && consumer.meterNo !== ''),
+                status: status,
+                statusLabel: status,
+                registrationStatus: consumer.isRegistered ? 'Registered' : 'Not Registered',
+                meterStatus: consumer.isClaimed ? 'Claimed' : 'Not Claimed',
+            };
+        });
 
         res.json({
             success: true,
@@ -2260,7 +2681,6 @@ app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
     }
 });
 
-// ✅ GET SINGLE CONSUMER
 app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2301,7 +2721,6 @@ app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response
     }
 });
 
-// ✅ ADD CONSUMER (No user creation)
 app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2328,7 +2747,6 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
         const consumersCollection = db.collection('consumers');
         const metersCollection = db.collection('meters');
 
-        // ✅ Check for duplicates
         const existingConsumer = await consumersCollection.findOne({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -2351,7 +2769,6 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
             });
         }
 
-        // ✅ Check if meter exists
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
@@ -2366,7 +2783,7 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
         if (meter.isClaimed) {
             return res.status(400).json({
                 success: false,
-                message: 'This meter is already claimed by another consumer',
+                message: 'Meter is already claimed. Please add a different meter.',
             });
         }
 
@@ -2377,8 +2794,8 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
             nidNo,
             address,
             consumerType: consumerType || 'residential',
-            feederName: feederName || meter.feederName || '',
-            meterNo: meterNo,
+            feederName: feederName || '',
+            meterNo,
             isActive: isActive !== undefined ? isActive : true,
             isClaimed: false,
             claimedBy: null,
@@ -2387,19 +2804,37 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
             registeredBy: null,
             registeredAt: null,
             userId: null,
+            role: 'consumer',
             createdAt: new Date(),
             updatedAt: new Date(),
         };
 
         const result = await consumersCollection.insertOne(newConsumer);
+        console.log(`✅ Consumer added: ${name} with meter ${meterNo}`);
+
+        await metersCollection.updateOne(
+            { meterNo },
+            {
+                $set: {
+                    consumerName: name,
+                    email: email,
+                    mobile: mobile,
+                    address: address,
+                    consumerType: consumerType || 'residential',
+                    feederName: feederName || '',
+                    status: 'pending_claim',
+                    isClaimed: false,
+                    updatedAt: new Date(),
+                }
+            }
+        );
 
         res.status(201).json({
             success: true,
-            message: 'Consumer added successfully. They can claim this meter after registration.',
+            message: 'Consumer added successfully',
             data: {
                 ...newConsumer,
                 _id: result.insertedId,
-                id: result.insertedId.toString(),
             },
         });
 
@@ -2413,7 +2848,6 @@ app.post('/api/connection-wing/add-consumer', async (req: Request, res: Response
     }
 });
 
-// ✅ UPDATE CONSUMER
 app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2479,6 +2913,7 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
             feederName: feederName || existingConsumer.feederName,
             meterNo: meterNo || existingConsumer.meterNo,
             isActive: isActive !== undefined ? isActive : existingConsumer.isActive,
+            role: 'consumer',
             updatedAt: new Date(),
         };
 
@@ -2505,7 +2940,6 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
     }
 });
 
-// ✅ DELETE CONSUMER
 app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2552,7 +2986,6 @@ app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Respo
     }
 });
 
-// ✅ GET CONSUMER SUMMARY
 app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2613,22 +3046,566 @@ app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: 
 });
 
 // =====================================================
-// 9. ADMIN ROUTES
+// 11. ADMIN USER MANAGEMENT ROUTES
 // =====================================================
+
 app.get('/api/admin/users', async (req: Request, res: Response) => {
     try {
         await connectDB();
-        const users = await db.collection('user').find({}).project({ password: 0 }).toArray();
-        res.json({ success: true, data: users });
+        const userCollection = db.collection('user');
+
+        const users = await userCollection
+            .find({})
+            .project({ password: 0 })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        console.log(`👥 Found ${users.length} users`);
+
+        res.json({
+            success: true,
+            data: users,
+        });
     } catch (error) {
-        console.error('Get users error:', error);
-        res.status(500).json({ success: false, message: 'Server error' });
+        console.error('❌ Get users error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch users',
+        });
+    }
+});
+
+app.get('/api/admin/users/:userId', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { userId } = req.params;
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const user = await userCollection.findOne(query, { projection: { password: 0 } });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        res.json({
+            success: true,
+            data: user,
+        });
+    } catch (error) {
+        console.error('❌ Get user error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch user',
+        });
+    }
+});
+
+app.patch('/api/admin/users/:userId/status', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { userId } = req.params;
+        const { isActive } = req.body;
+
+        if (isActive === undefined) {
+            return res.status(400).json({
+                success: false,
+                message: 'isActive field is required',
+            });
+        }
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const result = await userCollection.updateOne(
+            query,
+            {
+                $set: {
+                    isActive: isActive,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
+
+        res.json({
+            success: true,
+            message: `User ${isActive ? 'activated' : 'deactivated'} successfully`,
+            data: updatedUser,
+        });
+    } catch (error) {
+        console.error('❌ Update user status error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update user status',
+        });
+    }
+});
+
+app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { userId } = req.params;
+        const { role } = req.body;
+
+        if (!role) {
+            return res.status(400).json({
+                success: false,
+                message: 'Role is required',
+            });
+        }
+
+        const validRoles = ['admin', 'xen', 'connection_wing', 'complaint_manager', 'billing_wings', 'consumer', 'applicant'];
+        if (!validRoles.includes(role)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role. Allowed: ' + validRoles.join(', '),
+            });
+        }
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const result = await userCollection.updateOne(
+            query,
+            {
+                $set: {
+                    role: role,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
+
+        res.json({
+            success: true,
+            message: `User role updated to ${role}`,
+            data: updatedUser,
+        });
+    } catch (error) {
+        console.error('❌ Update user role error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update user role',
+        });
+    }
+});
+
+app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { userId } = req.params;
+        const {
+            name,
+            email,
+            mobile,
+            nidNo,
+            role,
+            isActive,
+            meterNo,
+            feederName,
+            address,
+        } = req.body;
+
+        if (!name || !email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Name and email are required',
+            });
+        }
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const existingUser = await userCollection.findOne({
+            email: { $regex: new RegExp(`^${email}$`, 'i') },
+            _id: { $ne: query._id },
+        });
+
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email already exists for another user',
+            });
+        }
+
+        const updateData: any = {
+            name,
+            email,
+            mobile: mobile || '',
+            nidNo: nidNo || '',
+            role: role || 'consumer',
+            isActive: isActive !== undefined ? isActive : true,
+            meterNo: meterNo || '',
+            feederName: feederName || '',
+            address: address || '',
+            updatedAt: new Date(),
+        };
+
+        const result = await userCollection.updateOne(
+            query,
+            { $set: updateData }
+        );
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
+
+        res.json({
+            success: true,
+            message: 'User updated successfully',
+            data: updatedUser,
+        });
+    } catch (error) {
+        console.error('❌ Update user error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to update user',
+        });
+    }
+});
+
+app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const consumersCollection = db.collection('consumers');
+        const { userId } = req.params;
+
+        let query;
+        try {
+            query = { _id: new ObjectId(userId) };
+        } catch {
+            query = { _id: userId };
+        }
+
+        const user = await userCollection.findOne(query);
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found',
+            });
+        }
+
+        if (user.role === 'admin') {
+            const adminCount = await userCollection.countDocuments({ role: 'admin' });
+            if (adminCount <= 1) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot delete the last admin user',
+                });
+            }
+        }
+
+        await userCollection.deleteOne(query);
+
+        await consumersCollection.updateMany(
+            { userId: userId },
+            {
+                $set: {
+                    userId: null,
+                    isRegistered: false,
+                    registeredBy: null,
+                    registeredAt: null,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        res.json({
+            success: true,
+            message: 'User deleted successfully',
+        });
+    } catch (error) {
+        console.error('❌ Delete user error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete user',
+        });
+    }
+});
+
+app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const { userIds, isActive } = req.body;
+
+        if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'User IDs array is required',
+            });
+        }
+
+        const objectIds = userIds.map((id: string) => {
+            try {
+                return new ObjectId(id);
+            } catch {
+                return id;
+            }
+        });
+
+        const result = await userCollection.updateMany(
+            { _id: { $in: objectIds } },
+            {
+                $set: {
+                    isActive: isActive,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        res.json({
+            success: true,
+            message: `${result.modifiedCount} user(s) ${isActive ? 'activated' : 'deactivated'}`,
+            data: {
+                matched: result.matchedCount,
+                modified: result.modifiedCount,
+            },
+        });
+    } catch (error) {
+        console.error('❌ Bulk update error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to perform bulk operation',
+        });
+    }
+});
+
+app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const consumersCollection = db.collection('consumers');
+        const { userIds } = req.body;
+
+        if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'User IDs array is required',
+            });
+        }
+
+        const objectIds = userIds.map((id: string) => {
+            try {
+                return new ObjectId(id);
+            } catch {
+                return id;
+            }
+        });
+
+        const adminUsers = await userCollection.find({
+            _id: { $in: objectIds },
+            role: 'admin',
+        }).toArray();
+
+        if (adminUsers.length > 0) {
+            const adminCount = await userCollection.countDocuments({ role: 'admin' });
+            if (adminCount <= adminUsers.length) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Cannot delete all admin users',
+                });
+            }
+        }
+
+        const result = await userCollection.deleteMany({
+            _id: { $in: objectIds },
+        });
+
+        await consumersCollection.updateMany(
+            { userId: { $in: userIds } },
+            {
+                $set: {
+                    userId: null,
+                    isRegistered: false,
+                    registeredBy: null,
+                    registeredAt: null,
+                    updatedAt: new Date(),
+                },
+            }
+        );
+
+        res.json({
+            success: true,
+            message: `${result.deletedCount} user(s) deleted`,
+            data: {
+                deleted: result.deletedCount,
+            },
+        });
+    } catch (error) {
+        console.error('❌ Bulk delete error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to delete users',
+        });
+    }
+});
+
+app.post('/api/admin/users', async (req: Request, res: Response) => {
+    try {
+        await connectDB();
+        const userCollection = db.collection('user');
+        const consumersCollection = db.collection('consumers');
+        const {
+            name,
+            email,
+            mobile,
+            nidNo,
+            password,
+            role,
+            meterNo,
+            feederName,
+            address,
+            consumerType,
+        } = req.body;
+
+        if (!name || !email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Name, email, and password are required',
+            });
+        }
+
+        const existingUser = await userCollection.findOne({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
+            ],
+        });
+
+        if (existingUser) {
+            return res.status(400).json({
+                success: false,
+                message: 'User with this email or mobile already exists',
+            });
+        }
+
+        const bcrypt = require('bcryptjs');
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const newUser = {
+            name,
+            email,
+            mobile: mobile || '',
+            nidNo: nidNo || '',
+            password: hashedPassword,
+            role: role || 'consumer',
+            isActive: true,
+            meterNo: meterNo || '',
+            feederName: feederName || '',
+            address: address || '',
+            consumerType: consumerType || 'residential',
+            meters: meterNo ? [meterNo] : [],
+            claimedMeters: [],
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        };
+
+        const result = await userCollection.insertOne(newUser);
+        const userId = result.insertedId.toString();
+
+        const existingConsumer = await consumersCollection.findOne({
+            $or: [
+                { email: { $regex: new RegExp(`^${email}$`, 'i') } },
+                { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
+            ],
+        });
+
+        if (!existingConsumer) {
+            const newConsumer = {
+                name,
+                email,
+                mobile: mobile || '',
+                nidNo: nidNo || '',
+                address: address || '',
+                consumerType: consumerType || 'residential',
+                feederName: feederName || '',
+                meterNo: meterNo || '',
+                isActive: true,
+                isClaimed: false,
+                claimedBy: null,
+                claimedAt: null,
+                isRegistered: true,
+                registeredBy: userId,
+                registeredAt: new Date(),
+                userId: userId,
+                role: 'consumer',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            await consumersCollection.insertOne(newConsumer);
+        }
+
+        const createdUser = await userCollection.findOne(
+            { _id: result.insertedId },
+            { projection: { password: 0 } }
+        );
+
+        res.status(201).json({
+            success: true,
+            message: 'User created successfully',
+            data: createdUser,
+        });
+    } catch (error) {
+        console.error('❌ Create user error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to create user',
+        });
     }
 });
 
 // =====================================================
-// 10. CONSUMER ROUTES
+// 12. CONSUMER BILLS
 // =====================================================
+
 app.get('/api/consumer/bills/:meterNo', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2642,8 +3619,9 @@ app.get('/api/consumer/bills/:meterNo', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 11. XEN ROUTES
+// 13. XEN ROUTES
 // =====================================================
+
 app.get('/api/xen/applications', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2656,7 +3634,7 @@ app.get('/api/xen/applications', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 12. TRANSACTION ROUTES
+// 14. TRANSACTION ROUTES
 // =====================================================
 
 app.get('/api/transactions/all', async (req: Request, res: Response) => {
@@ -2728,7 +3706,7 @@ app.get('/api/transactions/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 13. SUBSTATION ROUTES
+// 15. SUBSTATION ROUTES
 // =====================================================
 
 app.get('/api/substations', async (req: Request, res: Response) => {
@@ -2787,12 +3765,9 @@ app.get('/api/substations/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 14. PAYMENT ROUTES
+// 16. PAYMENT ROUTES
 // =====================================================
 
-// backend/src/index.ts - আপডেটেড create-payment-session রাউট
-
-// ✅ CREATE PAYMENT SESSION - Supports both Bill and Application
 app.post('/api/create-payment-session', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2809,7 +3784,6 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
 
         console.log('📦 Payment request received:', { applicationId, billId, amount, consumerId });
 
-        // ✅ Check if either applicationId or billId is provided
         if (!applicationId && !billId) {
             return res.status(400).json({
                 success: false,
@@ -2835,7 +3809,6 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
 
         const stripe = require('stripe')(stripeSecretKey);
 
-        // ✅ Determine payment type
         let paymentType = '';
         let paymentId = '';
         let productName = '';
@@ -2881,7 +3854,6 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
 
         console.log('✅ Stripe session created:', session.id);
 
-        // ✅ Store payment session in database
         await db.collection('payment_sessions').insertOne({
             sessionId: session.id,
             applicationId: applicationId || null,
@@ -2907,107 +3879,18 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
     }
 });
 
-// backend/src/index.ts - METER ROUTES সেকশনে যোগ করুন
-
-// ✅ CHECK METER AVAILABILITY FOR USER (for claiming)
-app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request, res: Response) => {
-    try {
-        await connectDB();
-        const metersCollection = db.collection('meters');
-        const consumersCollection = db.collection('consumers');
-        const userCollection = db.collection('user');
-        const { meterNo } = req.params;
-        const userId = req.query.userId as string;
-
-        console.log(`🔍 Checking meter availability for user: ${meterNo}, userId: ${userId}`);
-
-        if (!meterNo) {
-            return res.status(400).json({
-                success: false,
-                message: 'Meter number is required'
-            });
-        }
-
-        // ✅ Check if meter exists
-        const meter = await metersCollection.findOne({
-            meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
-        });
-
-        if (!meter) {
-            return res.status(404).json({
-                success: false,
-                message: 'Meter not found in the system'
-            });
-        }
-
-        // ✅ Check if meter is already claimed
-        if (meter.isClaimed) {
-            // Check if claimed by this user
-            if (meter.claimedBy === userId) {
-                return res.json({
-                    success: true,
-                    data: {
-                        isAvailable: false,
-                        isAlreadyClaimed: true,
-                        message: 'You have already claimed this meter'
-                    }
-                });
-            }
-            return res.json({
-                success: true,
-                data: {
-                    isAvailable: false,
-                    isAlreadyClaimed: false,
-                    message: 'This meter is already claimed by another user'
-                }
-            });
-        }
-
-        // ✅ Check if there's a consumer associated
-        const consumer = await consumersCollection.findOne({
-            meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
-        });
-
-        // ✅ Get meter details with consumer info
-        const meterData = {
-            ...meter,
-            consumerName: consumer?.name || meter.consumerName || 'Pending',
-            consumerType: consumer?.consumerType || meter.consumerType || 'residential',
-            address: consumer?.address || meter.address || '',
-            feederName: meter.feederName || '',
-            isClaimed: meter.isClaimed || false,
-        };
-
-        res.json({
-            success: true,
-            data: {
-                isAvailable: true,
-                isAlreadyClaimed: false,
-                message: 'Meter is available for claiming',
-                meter: meterData
-            }
-        });
-
-    } catch (error) {
-        console.error('Check meter availability error:', error);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to check meter availability',
-            error: error instanceof Error ? error.message : 'Unknown error'
-        });
-    }
-});
-
-
-
 app.get('/api/payment-success', async (req: Request, res: Response) => {
     try {
-        const { session_id, app_id } = req.query;
+        const { session_id, app_id, bill_id } = req.query;
 
-        console.log('✅ Payment success callback:', { session_id, app_id });
+        console.log('✅ Payment success callback:', { session_id, app_id, bill_id });
+
+        const transactionsCollection = db.collection('transactions');
 
         if (app_id) {
-            await db.collection('connection_applications').updateOne(
+            const applicationsCollection = db.collection('connection_applications');
+
+            await applicationsCollection.updateOne(
                 { applicationId: app_id },
                 {
                     $set: {
@@ -3017,23 +3900,91 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                     },
                 }
             );
+
+            const application = await applicationsCollection.findOne({ applicationId: app_id });
+            if (application) {
+                const transaction = {
+                    transactionId: `TXN-${Date.now()}`,
+                    type: 'connection_fee',
+                    category: 'New Connection Fee',
+                    amount: application.feeAmount || 5000,
+                    status: 'completed',
+                    paymentMethod: 'stripe',
+                    consumerName: application.applicantName || 'Unknown',
+                    meterNo: application.meterNo || 'N/A',
+                    referenceId: app_id,
+                    description: `New connection fee payment for ${app_id}`,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                    completedAt: new Date(),
+                };
+                await transactionsCollection.insertOne(transaction);
+                console.log('✅ Transaction created for connection fee:', app_id);
+            }
+
+            return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=success`);
         }
 
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=success`);
+        if (bill_id) {
+            const billsCollection = db.collection('bills');
+
+            await billsCollection.updateOne(
+                { billId: bill_id },
+                {
+                    $set: {
+                        status: 'paid',
+                        isPaid: true,
+                        paidAt: new Date(),
+                        paymentMethod: 'Stripe',
+                        updatedAt: new Date(),
+                    },
+                }
+            );
+
+            const bill = await billsCollection.findOne({ billId: bill_id });
+            if (bill) {
+                const transaction = {
+                    transactionId: `TXN-${Date.now()}`,
+                    type: 'bill_payment',
+                    category: 'Monthly Bill Payment',
+                    amount: bill.totalAmount || 0,
+                    status: 'completed',
+                    paymentMethod: 'stripe',
+                    consumerName: bill.consumerName || 'Unknown',
+                    meterNo: bill.meterNo || 'N/A',
+                    referenceId: bill_id,
+                    description: `Bill payment for ${bill_id} - ${bill.billingMonth || ''}`,
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                    completedAt: new Date(),
+                };
+                await transactionsCollection.insertOne(transaction);
+                console.log('✅ Transaction created for bill payment:', bill_id);
+            }
+
+            return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=success`);
+        }
+
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
 
     } catch (error) {
         console.error('Payment success error:', error);
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=failed`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer?payment=failed`);
     }
 });
 
 app.get('/api/payment-cancel', async (req: Request, res: Response) => {
-    const { app_id } = req.query;
-    console.log('❌ Payment cancelled:', { app_id });
-    res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=cancelled`);
-});
+    const { app_id, bill_id } = req.query;
+    console.log('❌ Payment cancelled:', { app_id, bill_id });
 
-// backend/src/index.ts - আপডেটেড payment-verify route
+    if (app_id) {
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=cancelled`);
+    } else if (bill_id) {
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=cancelled`);
+    } else {
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
+    }
+});
 
 app.post('/api/payment-verify', async (req: Request, res: Response) => {
     try {
@@ -3050,7 +4001,6 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ For New Connection Application
         if (applicationId) {
             const applicationsCollection = db.collection('connection_applications');
             const application = await applicationsCollection.findOne({ applicationId });
@@ -3089,7 +4039,6 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ For Bill Payment
         if (billId) {
             const billsCollection = db.collection('bills');
             const bill = await billsCollection.findOne({ billId });
@@ -3130,15 +4079,12 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
             });
         }
 
-        // ✅ If sessionId is provided, find from payment_sessions
         if (sessionId) {
             const paymentSessionsCollection = db.collection('payment_sessions');
             const paymentSession = await paymentSessionsCollection.findOne({ sessionId });
 
             if (paymentSession) {
-                // Check if it's for application or bill
                 if (paymentSession.applicationId) {
-                    // Handle application payment
                     const applicationsCollection = db.collection('connection_applications');
                     await applicationsCollection.updateOne(
                         { applicationId: paymentSession.applicationId },
@@ -3159,7 +4105,6 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                         data: updated,
                     });
                 } else if (paymentSession.billId) {
-                    // Handle bill payment
                     const billsCollection = db.collection('bills');
                     await billsCollection.updateOne(
                         { billId: paymentSession.billId },
@@ -3211,14 +4156,14 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 15. 404 HANDLER
+// 17. 404 HANDLER
 // =====================================================
 app.use((req: Request, res: Response) => {
     res.status(404).json({ success: false, message: 'Route not found' });
 });
 
 // =====================================================
-// 16. ERROR HANDLER
+// 18. ERROR HANDLER
 // =====================================================
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
     console.error('❌ Error:', err);
@@ -3232,6 +4177,9 @@ const startServer = async () => {
     try {
         await connectDB();
         console.log('✅ Database ready');
+
+        await initializeCollections();
+
         await initAuth();
 
         app.listen(PORT, () => {
@@ -3240,41 +4188,18 @@ const startServer = async () => {
             console.log(`📡 Health: http://localhost:${PORT}/api/health`);
             console.log(`🔐 Better Auth: http://localhost:${PORT}/api/auth`);
             console.log(`\n📋 Routes:`);
-            console.log(`  📌 Complaints - POST /api/complaints`);
-            console.log(`  📌 Complaints - GET /api/complaints/all`);
-            console.log(`  📌 Applications - POST /api/connection-applications`);
-            console.log(`  📌 Applications - GET /api/connection-applications/all`);
-            console.log(`  📌 Wing - GET /api/connection-wing/applications`);
-            console.log(`  📌 Wing - POST /api/connection-wing/applications/:id/assign-meter`);
-            console.log(`  📌 Wing - PATCH /api/connection-wing/applications/:id/status`);
-            console.log(`  📌 Meters - GET /api/meters/check-assignment/:meterNo`);
-            console.log(`  📌 Meters - GET /api/meters/check-availability/:meterNo`);
-            console.log(`  📌 Meters - POST /api/connection-wing/add-meter`);
-            console.log(`  📌 Meters - GET /api/meters/available`);
-            console.log(`  📌 Meters - GET /api/meters/search/:meterNo`);
-            console.log(`  📌 Meters - POST /api/meters/claim`);
-            console.log(`  📌 Meters - POST /api/meters/claim-for-consumer`);
-            console.log(`  📌 Users - GET /api/user/meters/:userId`);
-            console.log(`  📌 Consumers - GET /api/consumers/status/:meterNo`);
-            console.log(`  📌 Consumers - GET /api/consumers/check-unique`);
-            console.log(`  📌 Billing - POST /api/billing/generate-bill`);
-            console.log(`  📌 Billing - GET /api/billing/bills/all`);
-            console.log(`  📌 Billing - GET /api/billing/bills/consumer/:consumerId`);
-            console.log(`  📌 Billing - GET /api/billing/bills/meter/:meterNo`);
-            console.log(`  📌 Billing - GET /api/billing/bills/:billId`);
-            console.log(`  📌 Billing - PATCH /api/billing/bills/:billId/pay`);
-            console.log(`  📌 Billing - GET /api/billing/consumers/all`);
-            console.log(`  📌 Billing - GET /api/billing/consumers/:consumerId`);
-            console.log(`  📌 Billing - PUT /api/billing/consumers/:consumerId`);
-            console.log(`  📌 Billing - DELETE /api/billing/consumers/:consumerId`);
-            console.log(`  📌 Billing - GET /api/billing/consumers/:consumerId/summary`);
-            console.log(`  📌 Admin - GET /api/admin/users`);
-            console.log(`  📌 Consumer - GET /api/consumer/bills/:meterNo`);
-            console.log(`  📌 XEN - GET /api/xen/applications`);
-            console.log(`  📌 Transactions - GET /api/transactions/all`);
-            console.log(`  📌 Substations - GET /api/substations`);
-            console.log(`  📌 Payment - POST /api/create-payment-session`);
-            console.log(`  📌 Payment - POST /api/payment-verify\n`);
+            console.log(`  📌 Auth - POST /api/auth/sign-up/email`);
+            console.log(`  📌 Auth - POST /api/auth/change-password`);
+            console.log(`  📌 Complaints - CRUD operations`);
+            console.log(`  📌 Applications - CRUD operations`);
+            console.log(`  📌 Connection Wing - Applications management`);
+            console.log(`  📌 Meters - CRUD and availability checks`);
+            console.log(`  📌 Billing - Bills and consumers management`);
+            console.log(`  📌 Admin - User management with roles`);
+            console.log(`  📌 Transactions - List and view`);
+            console.log(`  📌 Substations - List and view`);
+            console.log(`  📌 Payment - Stripe integration`);
+            console.log(`\n✅ Server started successfully!\n`);
         });
     } catch (error) {
         console.error('❌ Failed to start server:', error);
