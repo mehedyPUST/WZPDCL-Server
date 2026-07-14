@@ -1,4 +1,4 @@
-// src/index.ts - COMPLETE BACKEND WITH SESSION FIX
+// src/index.ts - COMPLETE BACKEND WITH SESSION FIX (FULLY FIXED)
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -196,36 +196,25 @@ const initializeCollections = async () => {
 const app: Application = express();
 
 // =====================================================
-// ✅ CRITICAL FIX 1: CORS CONFIGURATION
+// ✅ CORS CONFIGURATION
 // =====================================================
-const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://wzpdcl-client.vercel.app',
-    'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
-];
-
-// src/index.ts - CORS Configuration (Replace this section)
 app.use(
     cors({
         origin: function (origin, callback) {
-            // Allow requests with no origin (like mobile apps or curl requests)
             if (!origin) return callback(null, true);
-
-            // Production origins
             const allowedOrigins = [
                 'http://localhost:3000',
-                'http://localhost:3000',
+                'http://localhost:3001',
                 'https://wzpdcl-client.vercel.app',
+                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
             ];
-
             if (allowedOrigins.indexOf(origin) !== -1) {
                 callback(null, true);
             } else {
                 callback(new Error('Not allowed by CORS'));
             }
         },
-        credentials: true, // ✅ MUST BE TRUE
+        credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
         exposedHeaders: ['Set-Cookie'],
@@ -256,10 +245,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // =====================================================
-// ✅ CRITICAL FIX 2: BETTER AUTH CONFIGURATION
-// =====================================================
-// =====================================================
-// BETTER AUTH SETUP - Complete with all options
+// ✅ BETTER AUTH SETUP - COMPLETE FIXED VERSION
 // =====================================================
 let auth: any = null;
 let authHandler: any = null;
@@ -276,17 +262,12 @@ const initAuth = async () => {
         const { toNodeHandler } = await import('better-auth/node');
 
         auth = betterAuth({
-            // ✅ Basic Configuration
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
             database: mongodbAdapter(getDB()),
-
-            // ✅ Email & Password Authentication
             emailAndPassword: {
                 enabled: true,
             },
-
-            // ✅ Social Providers
             socialProviders: {
                 google: {
                     clientId: process.env.GOOGLE_CLIENT_ID || '',
@@ -294,8 +275,6 @@ const initAuth = async () => {
                     scope: ['email', 'profile'],
                 },
             },
-
-            // ✅ User Custom Fields
             user: {
                 additionalFields: {
                     mobile: { type: 'string', required: false },
@@ -311,32 +290,16 @@ const initAuth = async () => {
                     address: { type: 'string', required: false },
                 },
             },
-
-            // ✅ Trusted Origins (for CSRF protection)
             trustedOrigins: [
                 'http://localhost:3000',
                 'http://localhost:3001',
                 'https://wzpdcl-client.vercel.app',
                 'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
             ],
-
-            // ✅ Advanced Settings - CRITICAL for Production
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                secureCookies: process.env.NODE_ENV === 'production',
+                useSecureCookies: process.env.NODE_ENV === 'production', // ✅ FIXED
                 sameSite: 'lax',
-            },
-
-            // ✅ Database Configuration
-            databaseHooks: {
-                createUser: async (user: any) => {
-                    console.log('🆕 New user created:', user.id);
-                    return user;
-                },
-                updateUser: async (user: any) => {
-                    console.log('📝 User updated:', user.id);
-                    return user;
-                },
             },
         });
 
