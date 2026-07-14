@@ -4,7 +4,12 @@
     ],
     "ext": "ts",
     "ignore": [
-        "src/**/*.spec.ts"
+        "src/**/*.spec.ts",
+        "node_modules",
+        "dist"
     ],
-    "exec": "npx tsx src/index.ts"
+    "exec": "tsx src/index.ts",
+    "env": {
+        "NODE_ENV": "development"
+    }
 }

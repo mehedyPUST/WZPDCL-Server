@@ -27,45 +27,62 @@ const createIdQuery = (id: string) => {
 };
 
 // =====================================================
-// MONGODB CONNECTION
+// MONGODB CONNECTION - OPTIMIZED FOR VERCEL
 // =====================================================
 let client: MongoClient;
 let db: Db;
 let isConnected = false;
+let connectionPromise: Promise<Db> | null = null;
 
 const connectDB = async (): Promise<Db> => {
-    if (db) return db;
-
-    try {
-        if (!MONGODB_URI) {
-            throw new Error('MONGODB_URI is not defined in environment variables');
-        }
-
-        if (!client) {
-            client = new MongoClient(MONGODB_URI, {
-                maxPoolSize: 10,
-                minPoolSize: 1,
-                socketTimeoutMS: 45000,
-                connectTimeoutMS: 10000,
-                serverSelectionTimeoutMS: 5000,
-            });
-        }
-
-        await client.connect();
-        console.log('✅ MongoDB Connected successfully');
-
-        db = client.db(DB_NAME);
-        isConnected = true;
-        console.log(`📁 Using database: ${DB_NAME}`);
-
-        const collections = await db.listCollections().toArray();
-        console.log('📂 Available collections:', collections.map(c => c.name));
-
+    if (db && isConnected) {
         return db;
-    } catch (error) {
-        console.error('❌ MongoDB connection error:', error);
-        throw error;
     }
+
+    if (connectionPromise) {
+        return connectionPromise;
+    }
+
+    connectionPromise = (async () => {
+        try {
+            if (!MONGODB_URI) {
+                throw new Error('MONGODB_URI is not defined in environment variables');
+            }
+
+            console.log('📦 Connecting to MongoDB...');
+
+            if (!client) {
+                client = new MongoClient(MONGODB_URI, {
+                    maxPoolSize: 1,
+                    minPoolSize: 1,
+                    socketTimeoutMS: 30000,
+                    connectTimeoutMS: 10000,
+                    serverSelectionTimeoutMS: 5000,
+                    retryWrites: true,
+                    retryReads: true,
+                });
+            }
+
+            await client.connect();
+            console.log('✅ MongoDB Connected successfully');
+
+            db = client.db(DB_NAME);
+            isConnected = true;
+            console.log(`📁 Using database: ${DB_NAME}`);
+
+            await db.command({ ping: 1 });
+            console.log('✅ MongoDB ping successful');
+
+            return db;
+        } catch (error) {
+            console.error('❌ MongoDB connection error:', error);
+            isConnected = false;
+            connectionPromise = null;
+            throw error;
+        }
+    })();
+
+    return connectionPromise;
 };
 
 const getDB = (): Db => {
@@ -153,7 +170,11 @@ const initializeCollections = async () => {
             'meters',
             'complaints',
             'connection_applications',
-            'substations'
+            'substations',
+            'user',
+            'session',
+            'account',
+            'verification'
         ];
 
         for (const name of collectionsToCreate) {
@@ -174,27 +195,57 @@ const initializeCollections = async () => {
 // =====================================================
 const app: Application = express();
 
+// ✅ CORS - Updated for production with environment variables
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',')
+    : [];
+
 app.use(
     cors({
-        origin: ['http://localhost:3000', 'http://localhost:3001', true],
+        origin: function (origin, callback) {
+            if (!origin) return callback(null, true);
+            if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
+        exposedHeaders: ['Set-Cookie'],
     })
 );
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // =====================================================
-// BETTER AUTH SETUP
+// ✅ ROOT ROUTE - Welcome message
+// =====================================================
+app.get('/', (req: Request, res: Response) => {
+    res.json({
+        success: true,
+        message: 'WZPDCL Backend API is running',
+        version: '1.0.0',
+        environment: process.env.NODE_ENV || 'development',
+        endpoints: {
+            health: '/api/health',
+            auth: '/api/auth',
+            complaints: '/api/complaints',
+            meters: '/api/meters',
+            bills: '/api/billing/bills',
+            consumers: '/api/billing/consumers',
+            applications: '/api/connection-applications',
+        }
+    });
+});
+
+// =====================================================
+// BETTER AUTH SETUP - Using dynamic import for ESM
 // =====================================================
 let auth: any = null;
 let authHandler: any = null;
 
-// Instead of:
-// import { betterAuth } from 'better-auth';
-
-// Use dynamic import:
 const initAuth = async () => {
     if (authHandler) return authHandler;
 
@@ -202,14 +253,17 @@ const initAuth = async () => {
         await connectDB();
         console.log('📦 Initializing Better Auth...');
 
-        // Dynamic import for ESM module
         const { betterAuth } = await import('better-auth');
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
 
+        const trustedOrigins = process.env.TRUSTED_ORIGINS
+            ? process.env.TRUSTED_ORIGINS.split(',')
+            : [];
+
         auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
-            baseURL: BETTER_AUTH_URL,
+            baseURL: BETTER_AUTH_URL || process.env.VERCEL_URL || 'https://wzpdcl-server.vercel.app',
             database: mongodbAdapter(getDB()),
             emailAndPassword: {
                 enabled: true,
@@ -236,9 +290,11 @@ const initAuth = async () => {
                     address: { type: 'string', required: false },
                 },
             },
-            trustedOrigins: ['http://localhost:3000', 'http://localhost:5000'],
+            trustedOrigins: trustedOrigins,
             advanced: {
                 cookiePrefix: 'wzpdcl',
+                secureCookies: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
             },
         });
 
@@ -255,6 +311,7 @@ const initAuth = async () => {
         };
     }
 };
+
 // =====================================================
 // BETTER AUTH SESSION MIDDLEWARE
 // =====================================================
@@ -1479,9 +1536,6 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 // 8. METER ROUTES
 // =====================================================
 
-// =====================================================
-// GET ALL METERS (For Billing Wings)
-// =====================================================
 app.get('/api/meters/all', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -1526,7 +1580,6 @@ app.get('/api/meters/all', async (req: Request, res: Response) => {
                     }
                 }
 
-                // ✅ Fixed: Type annotation added
                 let billStatus = 'pending';
                 let existingBill: any = null;
 
@@ -2553,9 +2606,6 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
 // =====================================================
 // GENERATE BILL
 // =====================================================
-// =====================================================
-// GENERATE BILL (Updated - Meter Based)  d 
-// =====================================================
 app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -2635,7 +2685,6 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
 
         console.log(`🔍 Meter found: ${meter.meterNo}, isClaimed: ${meter.isClaimed}`);
 
-        // ✅ Fixed: Explicit type declarations
         let consumerName: string = 'N/A';
         let consumerEmail: string = 'N/A';
         let consumerMobile: string = 'N/A';
@@ -2654,7 +2703,7 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
                     consumerEmail = user.email || 'N/A';
                     consumerMobile = user.mobile || 'N/A';
                     consumerAddress = user.address || meter.address || 'N/A';
-                    consumerId = user._id.toString(); // ✅ Direct toString()
+                    consumerId = user._id.toString();
                     consumerType = user.consumerType || meter.consumerType || 'residential';
                     isRegisteredUser = true;
                     console.log(`✅ Meter ${meterNo} is claimed by registered user: ${consumerName}`);
@@ -2681,7 +2730,6 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
             console.log(`⚪ Meter ${meterNo} is not claimed. Bill will be generated with N/A.`);
         }
 
-        // Check if bill already exists
         const existingBill = await billsCollection.findOne({
             meterNo,
             billingMonth,
@@ -2929,7 +2977,6 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
 
         const updatedConsumer = await consumersCollection.findOne(query);
 
-        // ✅ Fixed: Added null check
         if (!updatedConsumer) {
             return res.status(404).json({
                 success: false,
@@ -2955,6 +3002,7 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
         });
     }
 });
+
 app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
     try {
         await connectDB();
@@ -3821,8 +3869,8 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
                 },
             ],
             mode: 'payment',
-            success_url: `${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/payment-success?session_id={CHECKOUT_SESSION_ID}&${paymentType}_id=${paymentId}`,
-            cancel_url: `${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/payment-cancel?${paymentType}_id=${paymentId}`,
+            success_url: `${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/payment-success?session_id={CHECKOUT_SESSION_ID}&${paymentType}_id=${paymentId}`,
+            cancel_url: `${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/payment-cancel?${paymentType}_id=${paymentId}`,
             metadata: {
                 ...metadata,
                 paymentType,
@@ -3901,7 +3949,7 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 console.log('✅ Transaction created for connection fee:', app_id);
             }
 
-            return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=success`);
+            return res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-connections?payment=success`);
         }
 
         if (bill_id) {
@@ -3941,14 +3989,14 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 console.log('✅ Transaction created for bill payment:', bill_id);
             }
 
-            return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=success`);
+            return res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-bills?payment=success`);
         }
 
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer`);
 
     } catch (error) {
         console.error('Payment success error:', error);
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer?payment=failed`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer?payment=failed`);
     }
 });
 
@@ -3957,11 +4005,11 @@ app.get('/api/payment-cancel', async (req: Request, res: Response) => {
     console.log('❌ Payment cancelled:', { app_id, bill_id });
 
     if (app_id) {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=cancelled`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-connections?payment=cancelled`);
     } else if (bill_id) {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=cancelled`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-bills?payment=cancelled`);
     } else {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
+        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer`);
     }
 });
 

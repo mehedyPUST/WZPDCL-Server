@@ -1,10 +1,8 @@
-# Remove src from ignore list - এই লাইনটি মুছে দিন বা কমেন্ট করুন
-# src
-
 node_modules
+src
 .git
 README.md
 .env
 .env.local
-*.log
-.DS_Store
+*.ts
+!api/*.js
