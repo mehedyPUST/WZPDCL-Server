@@ -1,48 +1,49 @@
+"use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.getDB = exports.connectDB = exports.app = void 0;
 // src/index.ts - Complete Backend with all routes (FULLY FIXED FOR VERCEL)
-import express, { Application, Request, Response, NextFunction } from 'express';
-import cors from 'cors';
-import dotenv from 'dotenv';
-import { MongoClient, Db, ObjectId } from 'mongodb';
-import { betterAuth } from 'better-auth';
-import { mongodbAdapter } from 'better-auth/adapters/mongodb';
-import { toNodeHandler } from 'better-auth/node';
-
-dotenv.config();
-
+const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
+const dotenv_1 = __importDefault(require("dotenv"));
+const mongodb_1 = require("mongodb");
+const better_auth_1 = require("better-auth");
+const mongodb_2 = require("better-auth/adapters/mongodb");
+const node_1 = require("better-auth/node");
+dotenv_1.default.config();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.DB_NAME;
 const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
 const BETTER_AUTH_URL = process.env.BETTER_AUTH_URL;
-
 // =====================================================
 // HELPER FUNCTION FOR OBJECT ID
 // =====================================================
-const createIdQuery = (id: string) => {
+const createIdQuery = (id) => {
     try {
-        return { _id: new ObjectId(id) };
-    } catch {
-        return { _id: id as any };
+        return { _id: new mongodb_1.ObjectId(id) };
+    }
+    catch {
+        return { _id: id };
     }
 };
-
 // =====================================================
 // MONGODB CONNECTION
 // =====================================================
-let client: MongoClient;
-let db: Db;
+let client;
+let db;
 let isConnected = false;
-
-const connectDB = async (): Promise<Db> => {
-    if (db) return db;
-
+const connectDB = async () => {
+    if (db)
+        return db;
     try {
         if (!MONGODB_URI) {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
-
         if (!client) {
-            client = new MongoClient(MONGODB_URI, {
+            client = new mongodb_1.MongoClient(MONGODB_URI, {
                 maxPoolSize: 10,
                 minPoolSize: 1,
                 socketTimeoutMS: 45000,
@@ -50,66 +51,48 @@ const connectDB = async (): Promise<Db> => {
                 serverSelectionTimeoutMS: 5000,
             });
         }
-
         await client.connect();
         console.log('✅ MongoDB Connected successfully');
-
         db = client.db(DB_NAME);
         isConnected = true;
         console.log(`📁 Using database: ${DB_NAME}`);
-
         const collections = await db.listCollections().toArray();
         console.log('📂 Available collections:', collections.map(c => c.name));
-
         return db;
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ MongoDB connection error:', error);
         throw error;
     }
 };
-
-const getDB = (): Db => {
+exports.connectDB = connectDB;
+const getDB = () => {
     if (!db) {
         throw new Error('Database not initialized. Call connectDB() first.');
     }
     return db;
 };
-
+exports.getDB = getDB;
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================
-
-const generateComplaintId = (): string => {
+const generateComplaintId = () => {
     const year = new Date().getFullYear();
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     return `CMP-${year}-${random}`;
 };
-
-const generateAppId = (): string => {
+const generateAppId = () => {
     const year = new Date().getFullYear();
     const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
     return `APP-${year}-${random}`;
 };
-
 // =====================================================
 // TRANSACTION HELPER
 // =====================================================
-
-const createTransaction = async (
-    type: 'connection_fee' | 'bill_payment' | 'refund' | 'adjustment',
-    category: string,
-    amount: number,
-    status: 'completed' | 'pending' | 'failed' | 'refunded',
-    paymentMethod: 'stripe' | 'cash' | 'bank_transfer' | 'mobile_banking',
-    consumerName: string,
-    meterNo: string,
-    referenceId: string,
-    description: string
-) => {
+const createTransaction = async (type, category, amount, status, paymentMethod, consumerName, meterNo, referenceId, description) => {
     try {
         const transactionsCollection = db.collection('transactions');
         const transactionId = `TXN-${Date.now()}-${Math.floor(Math.random() * 1000).toString().padStart(3, '0')}`;
-
         const transaction = {
             transactionId,
             type,
@@ -125,26 +108,23 @@ const createTransaction = async (
             updatedAt: new Date(),
             completedAt: status === 'completed' ? new Date() : null,
         };
-
         await transactionsCollection.insertOne(transaction);
         console.log(`✅ Transaction created: ${transactionId} for ${referenceId}`);
         return transaction;
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Error creating transaction:', error);
         return null;
     }
 };
-
 // =====================================================
 // INITIALIZE COLLECTIONS
 // =====================================================
-
 const initializeCollections = async () => {
     try {
         await connectDB();
         const collections = await db.listCollections().toArray();
         const collectionNames = collections.map(c => c.name);
-
         const collectionsToCreate = [
             'transactions',
             'payment_sessions',
@@ -155,53 +135,46 @@ const initializeCollections = async () => {
             'connection_applications',
             'substations'
         ];
-
         for (const name of collectionsToCreate) {
             if (!collectionNames.includes(name)) {
                 await db.createCollection(name);
                 console.log(`✅ ${name} collection created`);
             }
         }
-
         console.log('✅ All collections initialized');
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Error initializing collections:', error);
     }
 };
-
 // =====================================================
 // EXPRESS APP
 // =====================================================
-const app: Application = express();
-
-app.use(
-    cors({
-        origin: ['http://localhost:3000', 'http://localhost:3001', true],
-        credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
-    })
-);
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
+const app = (0, express_1.default)();
+exports.app = app;
+app.use((0, cors_1.default)({
+    origin: ['http://localhost:3000', 'http://localhost:3001', true],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
+app.use(express_1.default.json());
+app.use(express_1.default.urlencoded({ extended: true }));
 // =====================================================
 // BETTER AUTH SETUP
 // =====================================================
-let auth: any = null;
-let authHandler: any = null;
-
+let auth = null;
+let authHandler = null;
 const initAuth = async () => {
-    if (authHandler) return authHandler;
-
+    if (authHandler)
+        return authHandler;
     try {
         await connectDB();
         console.log('📦 Initializing Better Auth...');
-
-        auth = betterAuth({
+        auth = (0, better_auth_1.betterAuth)({
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL,
-            database: mongodbAdapter(getDB()),
+            database: (0, mongodb_2.mongodbAdapter)(getDB()),
             emailAndPassword: {
                 enabled: true,
             },
@@ -238,13 +211,13 @@ const initAuth = async () => {
                 cookiePrefix: 'wzpdcl',
             },
         });
-
-        authHandler = toNodeHandler(auth);
+        authHandler = (0, node_1.toNodeHandler)(auth);
         console.log('✅ Better Auth initialized successfully');
         return authHandler;
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Better Auth initialization failed:', error);
-        return (req: Request, res: Response) => {
+        return (req, res) => {
             res.status(503).json({
                 success: false,
                 message: 'Authentication service unavailable'
@@ -252,30 +225,27 @@ const initAuth = async () => {
         };
     }
 };
-
 // =====================================================
 // BETTER AUTH SESSION MIDDLEWARE
 // =====================================================
-
-const protect = async (req: Request, res: Response, next: NextFunction) => {
+const protect = async (req, res, next) => {
     try {
         const session = await auth.api.getSession({
             headers: req.headers,
         });
-
         if (!session) {
             return res.status(401).json({
                 success: false,
                 message: 'Not authorized. Please login.',
             });
         }
-
         // @ts-ignore
         req.user = session.user;
         // @ts-ignore
         req.session = session;
         next();
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Auth middleware error:', error);
         return res.status(401).json({
             success: false,
@@ -283,12 +253,10 @@ const protect = async (req: Request, res: Response, next: NextFunction) => {
         });
     }
 };
-
-const authorize = (...roles: string[]) => {
-    return (req: Request, res: Response, next: NextFunction) => {
+const authorize = (...roles) => {
+    return (req, res, next) => {
         // @ts-ignore
         const userRole = req.user?.role;
-
         if (!userRole || !roles.includes(userRole)) {
             return res.status(403).json({
                 success: false,
@@ -298,11 +266,10 @@ const authorize = (...roles: string[]) => {
         next();
     };
 };
-
 // =====================================================
 // 1. HEALTH CHECK
 // =====================================================
-app.get('/api/health', async (req: Request, res: Response) => {
+app.get('/api/health', async (req, res) => {
     try {
         await connectDB();
         const collections = await db.listCollections().toArray();
@@ -314,19 +281,20 @@ app.get('/api/health', async (req: Request, res: Response) => {
             database: DB_NAME,
             collections: collections.map((c) => c.name),
         });
-    } catch (error) {
+    }
+    catch (error) {
         res.status(500).json({ status: 'error', message: 'Database connection failed' });
     }
 });
-
 // =====================================================
 // 2. BETTER AUTH ROUTES
 // =====================================================
-app.use('/api/auth', async (req: Request, res: Response, next: NextFunction) => {
+app.use('/api/auth', async (req, res, next) => {
     try {
         const handler = await initAuth();
         handler(req, res, next);
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Better Auth error:', error);
         res.status(500).json({
             success: false,
@@ -334,20 +302,16 @@ app.use('/api/auth', async (req: Request, res: Response, next: NextFunction) => 
         });
     }
 });
-
 // =====================================================
 // 3. CUSTOM SIGN-UP WITH CONSUMER SYNC
 // =====================================================
-
-app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
+app.post('/api/auth/sign-up/email', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const consumersCollection = db.collection('consumers');
         const { email, mobile, nidNo, name, password, role, meterNo, feederName, consumerType, address } = req.body;
-
         console.log('📝 Registration request:', { email, mobile, nidNo, name });
-
         const existingUser = await userCollection.findOne({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -355,13 +319,14 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
                 { nidNo: { $regex: new RegExp(`^${nidNo}$`, 'i') } }
             ]
         });
-
         if (existingUser) {
             let duplicateField = '';
-            if (existingUser.email === email) duplicateField = 'Email';
-            else if (existingUser.mobile === mobile) duplicateField = 'Mobile';
-            else if (existingUser.nidNo === nidNo) duplicateField = 'NID';
-
+            if (existingUser.email === email)
+                duplicateField = 'Email';
+            else if (existingUser.mobile === mobile)
+                duplicateField = 'Mobile';
+            else if (existingUser.nidNo === nidNo)
+                duplicateField = 'NID';
             return res.status(400).json({
                 success: false,
                 message: `${duplicateField} already exists in the system`,
@@ -371,7 +336,6 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
                 }
             });
         }
-
         const response = await auth.api.signUpEmail({
             body: {
                 email,
@@ -388,15 +352,11 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
             },
             headers: req.headers,
         });
-
         if (!response) {
             throw new Error('Failed to create user');
         }
-
         console.log('✅ User registered successfully:', response.user.id);
-
         const userId = response.user.id;
-
         let consumer = await consumersCollection.findOne({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
@@ -404,29 +364,26 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
                 { nidNo: { $regex: new RegExp(`^${nidNo}$`, 'i') } }
             ]
         });
-
         if (consumer) {
-            await consumersCollection.updateOne(
-                { _id: consumer._id },
-                {
-                    $set: {
-                        userId: userId,
-                        isRegistered: true,
-                        registeredBy: userId,
-                        registeredAt: new Date(),
-                        isActive: true,
-                        name: name,
-                        email: email,
-                        mobile: mobile,
-                        nidNo: nidNo,
-                        address: address || consumer.address,
-                        role: 'consumer',
-                        updatedAt: new Date(),
-                    }
+            await consumersCollection.updateOne({ _id: consumer._id }, {
+                $set: {
+                    userId: userId,
+                    isRegistered: true,
+                    registeredBy: userId,
+                    registeredAt: new Date(),
+                    isActive: true,
+                    name: name,
+                    email: email,
+                    mobile: mobile,
+                    nidNo: nidNo,
+                    address: address || consumer.address,
+                    role: 'consumer',
+                    updatedAt: new Date(),
                 }
-            );
+            });
             console.log(`✅ Existing consumer updated with user ID: ${userId}`);
-        } else {
+        }
+        else {
             const newConsumer = {
                 name: name,
                 email: email,
@@ -448,18 +405,16 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
                 createdAt: new Date(),
                 updatedAt: new Date(),
             };
-
             await consumersCollection.insertOne(newConsumer);
             console.log(`✅ New consumer created for user: ${userId}`);
         }
-
         res.status(201).json({
             success: true,
             message: 'Registration successful',
             data: response,
         });
-
-    } catch (error: any) {
+    }
+    catch (error) {
         console.error('❌ Registration error:', error);
         res.status(500).json({
             success: false,
@@ -468,37 +423,32 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 4. CHANGE PASSWORD
 // =====================================================
-
-app.post('/api/auth/change-password', async (req: Request, res: Response) => {
+app.post('/api/auth/change-password', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { currentPassword, newPassword } = req.body;
-
         console.log('📝 Change password request received');
-
         let session;
         try {
             session = await auth.api.getSession({
                 headers: req.headers,
             });
-        } catch (sessionError) {
+        }
+        catch (sessionError) {
             console.error('❌ Session error:', sessionError);
         }
-
         if (!session || !session.user) {
             const cookieHeader = req.headers.cookie;
             if (cookieHeader) {
-                const cookies = cookieHeader.split(';').reduce((acc: any, cookie) => {
+                const cookies = cookieHeader.split(';').reduce((acc, cookie) => {
                     const [key, value] = cookie.trim().split('=');
                     acc[key] = value;
                     return acc;
                 }, {});
-
                 const sessionToken = cookies['better-auth.session'];
                 if (sessionToken) {
                     try {
@@ -509,13 +459,13 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
                                 session = { user: payload.user };
                             }
                         }
-                    } catch (decodeError) {
+                    }
+                    catch (decodeError) {
                         console.error('❌ Decode error:', decodeError);
                     }
                 }
             }
         }
-
         if (!session || !session.user) {
             console.log('❌ No session found');
             return res.status(401).json({
@@ -523,26 +473,21 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
                 message: 'Unauthorized. Please login again.',
             });
         }
-
         const userId = session.user.id;
         console.log(`👤 User ID: ${userId}`);
-
         if (!currentPassword || !newPassword) {
             return res.status(400).json({
                 success: false,
                 message: 'Current password and new password are required',
             });
         }
-
         if (newPassword.length < 8) {
             return res.status(400).json({
                 success: false,
                 message: 'New password must be at least 8 characters',
             });
         }
-
         const query = createIdQuery(userId);
-
         const user = await userCollection.findOne(query);
         if (!user) {
             return res.status(404).json({
@@ -550,9 +495,7 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
                 message: 'User not found',
             });
         }
-
         console.log('🔐 Verifying current password...');
-
         const bcrypt = require('bcryptjs');
         const isValid = await bcrypt.compare(currentPassword, user.password);
         if (!isValid) {
@@ -561,27 +504,21 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
                 message: 'Current password is incorrect',
             });
         }
-
         console.log('✅ Password verified, hashing new password...');
-
         const hashedPassword = await bcrypt.hash(newPassword, 10);
-        await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    password: hashedPassword,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        await userCollection.updateOne(query, {
+            $set: {
+                password: hashedPassword,
+                updatedAt: new Date(),
+            },
+        });
         console.log('✅ Password updated successfully');
-
         res.json({
             success: true,
             message: 'Password updated successfully',
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Change password error:', error);
         res.status(500).json({
             success: false,
@@ -590,30 +527,14 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 5. COMPLAINT ROUTES
 // =====================================================
-
-app.post('/api/complaints', async (req: Request, res: Response) => {
+app.post('/api/complaints', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
-
-        const {
-            meterNo,
-            subject,
-            category,
-            description,
-            priority,
-            feederName,
-            transformerNo,
-            contactNumber,
-            address,
-            consumerId,
-            consumerName,
-        } = req.body;
-
+        const { meterNo, subject, category, description, priority, feederName, transformerNo, contactNumber, address, consumerId, consumerName, } = req.body;
         if (!meterNo || !subject || !category || !description || !feederName ||
             !transformerNo || !contactNumber || !address) {
             return res.status(400).json({
@@ -621,14 +542,12 @@ app.post('/api/complaints', async (req: Request, res: Response) => {
                 message: 'All required fields must be filled',
             });
         }
-
         let complaintId = generateComplaintId();
         let existing = await complaintsCollection.findOne({ complaintId });
         while (existing) {
             complaintId = generateComplaintId();
             existing = await complaintsCollection.findOne({ complaintId });
         }
-
         const newComplaint = {
             complaintId,
             meterNo,
@@ -649,9 +568,7 @@ app.post('/api/complaints', async (req: Request, res: Response) => {
             createdAt: new Date(),
             updatedAt: new Date(),
         };
-
         const result = await complaintsCollection.insertOne(newComplaint);
-
         res.status(201).json({
             success: true,
             message: 'Complaint submitted successfully',
@@ -660,8 +577,8 @@ app.post('/api/complaints', async (req: Request, res: Response) => {
                 _id: result.insertedId,
             },
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Create complaint error:', error);
         res.status(500).json({
             success: false,
@@ -669,23 +586,21 @@ app.post('/api/complaints', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/complaints/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/complaints/consumer/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { consumerId } = req.params;
-
         const complaints = await complaintsCollection
             .find({ consumerId })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: complaints,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get complaints error:', error);
         res.status(500).json({
             success: false,
@@ -693,23 +608,21 @@ app.get('/api/complaints/consumer/:consumerId', async (req: Request, res: Respon
         });
     }
 });
-
-app.get('/api/complaints/meter/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/complaints/meter/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { meterNo } = req.params;
-
         const complaints = await complaintsCollection
             .find({ meterNo })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: complaints,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get complaints error:', error);
         res.status(500).json({
             success: false,
@@ -717,19 +630,17 @@ app.get('/api/complaints/meter/:meterNo', async (req: Request, res: Response) =>
         });
     }
 });
-
-app.get('/api/complaints/all', async (req: Request, res: Response) => {
+app.get('/api/complaints/all', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { status, priority, page = 1, limit = 10 } = req.query;
-
-        const filter: any = {};
-        if (status) filter.status = status;
-        if (priority) filter.priority = priority;
-
+        const filter = {};
+        if (status)
+            filter.status = status;
+        if (priority)
+            filter.priority = priority;
         const skip = (Number(page) - 1) * Number(limit);
-
         const [complaints, total] = await Promise.all([
             complaintsCollection
                 .find(filter)
@@ -739,7 +650,6 @@ app.get('/api/complaints/all', async (req: Request, res: Response) => {
                 .toArray(),
             complaintsCollection.countDocuments(filter),
         ]);
-
         res.json({
             success: true,
             data: complaints,
@@ -750,7 +660,8 @@ app.get('/api/complaints/all', async (req: Request, res: Response) => {
                 totalPages: Math.ceil(total / Number(limit)),
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get all complaints error:', error);
         res.status(500).json({
             success: false,
@@ -758,36 +669,35 @@ app.get('/api/complaints/all', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/complaints/:id', async (req: Request, res: Response) => {
+app.get('/api/complaints/:id', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { id } = req.params;
-
         let complaint;
         if (id.startsWith('CMP-')) {
             complaint = await complaintsCollection.findOne({ complaintId: id });
-        } else {
+        }
+        else {
             try {
-                complaint = await complaintsCollection.findOne({ _id: new ObjectId(id) });
-            } catch {
+                complaint = await complaintsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+            }
+            catch {
                 complaint = await complaintsCollection.findOne({ complaintId: id });
             }
         }
-
         if (!complaint) {
             return res.status(404).json({
                 success: false,
                 message: 'Complaint not found',
             });
         }
-
         res.json({
             success: true,
             data: complaint,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get complaint error:', error);
         res.status(500).json({
             success: false,
@@ -795,51 +705,44 @@ app.get('/api/complaints/:id', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.patch('/api/complaints/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/complaints/:id/status', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { id } = req.params;
         const { status, assignedTo, remarks } = req.body;
-
         if (!status) {
             return res.status(400).json({
                 success: false,
                 message: 'Status is required',
             });
         }
-
-        const updateData: any = {
+        const updateData = {
             status,
             updatedAt: new Date(),
         };
-        if (assignedTo) updateData.assignedTo = assignedTo;
-        if (remarks) updateData.remarks = remarks;
+        if (assignedTo)
+            updateData.assignedTo = assignedTo;
+        if (remarks)
+            updateData.remarks = remarks;
         if (status === 'solved' || status === 'rejected') {
             updateData.resolvedAt = new Date();
         }
-
-        const result = await complaintsCollection.updateOne(
-            { complaintId: id },
-            { $set: updateData }
-        );
-
+        const result = await complaintsCollection.updateOne({ complaintId: id }, { $set: updateData });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Complaint not found',
             });
         }
-
         const updated = await complaintsCollection.findOne({ complaintId: id });
-
         res.json({
             success: true,
             message: `Complaint ${status}`,
             data: updated,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Update complaint error:', error);
         res.status(500).json({
             success: false,
@@ -847,27 +750,24 @@ app.patch('/api/complaints/:id/status', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.delete('/api/complaints/:id', async (req: Request, res: Response) => {
+app.delete('/api/complaints/:id', async (req, res) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
         const { id } = req.params;
-
         const result = await complaintsCollection.deleteOne({ complaintId: id });
-
         if (result.deletedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Complaint not found',
             });
         }
-
         res.json({
             success: true,
             message: 'Complaint deleted successfully',
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Delete complaint error:', error);
         res.status(500).json({
             success: false,
@@ -875,39 +775,14 @@ app.delete('/api/complaints/:id', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 6. CONNECTION APPLICATION ROUTES
 // =====================================================
-
-app.post('/api/connection-applications', async (req: Request, res: Response) => {
+app.post('/api/connection-applications', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
-
-        const {
-            applicantName,
-            email,
-            mobile,
-            nidNo,
-            address,
-            connectionType,
-            loadRequired,
-            voltageLevel,
-            purpose,
-            feederName,
-            transformerNo,
-            poleNumber,
-            nearestLandmark,
-            tinNumber,
-            tradeLicense,
-            plotNumber,
-            holdingNumber,
-            remarks,
-            consumerId,
-            feeAmount,
-        } = req.body;
-
+        const { applicantName, email, mobile, nidNo, address, connectionType, loadRequired, voltageLevel, purpose, feederName, transformerNo, poleNumber, nearestLandmark, tinNumber, tradeLicense, plotNumber, holdingNumber, remarks, consumerId, feeAmount, } = req.body;
         if (!applicantName || !email || !mobile || !nidNo || !address ||
             !connectionType || !loadRequired || !purpose || !feederName) {
             return res.status(400).json({
@@ -915,14 +790,12 @@ app.post('/api/connection-applications', async (req: Request, res: Response) => 
                 message: 'All required fields must be filled',
             });
         }
-
         let applicationId = generateAppId();
         let existing = await applicationsCollection.findOne({ applicationId });
         while (existing) {
             applicationId = generateAppId();
             existing = await applicationsCollection.findOne({ applicationId });
         }
-
         const newApplication = {
             applicationId,
             applicantName,
@@ -954,9 +827,7 @@ app.post('/api/connection-applications', async (req: Request, res: Response) => 
             createdAt: new Date(),
             updatedAt: new Date(),
         };
-
         const result = await applicationsCollection.insertOne(newApplication);
-
         res.status(201).json({
             success: true,
             message: 'Application submitted successfully',
@@ -965,8 +836,8 @@ app.post('/api/connection-applications', async (req: Request, res: Response) => 
                 _id: result.insertedId,
             },
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Create application error:', error);
         res.status(500).json({
             success: false,
@@ -974,23 +845,21 @@ app.post('/api/connection-applications', async (req: Request, res: Response) => 
         });
     }
 });
-
-app.get('/api/connection-applications/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/consumer/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { consumerId } = req.params;
-
         const applications = await applicationsCollection
             .find({ consumerId })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: applications,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get applications error:', error);
         res.status(500).json({
             success: false,
@@ -998,18 +867,15 @@ app.get('/api/connection-applications/consumer/:consumerId', async (req: Request
         });
     }
 });
-
-app.get('/api/connection-applications/all', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/all', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { status, page = 1, limit = 10 } = req.query;
-
-        const filter: any = {};
-        if (status) filter.status = status;
-
+        const filter = {};
+        if (status)
+            filter.status = status;
         const skip = (Number(page) - 1) * Number(limit);
-
         const [applications, total] = await Promise.all([
             applicationsCollection
                 .find(filter)
@@ -1019,7 +885,6 @@ app.get('/api/connection-applications/all', async (req: Request, res: Response) 
                 .toArray(),
             applicationsCollection.countDocuments(filter),
         ]);
-
         res.json({
             success: true,
             data: applications,
@@ -1030,7 +895,8 @@ app.get('/api/connection-applications/all', async (req: Request, res: Response) 
                 totalPages: Math.ceil(total / Number(limit)),
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get all applications error:', error);
         res.status(500).json({
             success: false,
@@ -1038,36 +904,35 @@ app.get('/api/connection-applications/all', async (req: Request, res: Response) 
         });
     }
 });
-
-app.get('/api/connection-applications/:id', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/:id', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { id } = req.params;
-
         let application;
         if (id.startsWith('APP-')) {
             application = await applicationsCollection.findOne({ applicationId: id });
-        } else {
+        }
+        else {
             try {
-                application = await applicationsCollection.findOne({ _id: new ObjectId(id) });
-            } catch {
+                application = await applicationsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+            }
+            catch {
                 application = await applicationsCollection.findOne({ applicationId: id });
             }
         }
-
         if (!application) {
             return res.status(404).json({
                 success: false,
                 message: 'Application not found',
             });
         }
-
         res.json({
             success: true,
             data: application,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get application error:', error);
         res.status(500).json({
             success: false,
@@ -1075,47 +940,39 @@ app.get('/api/connection-applications/:id', async (req: Request, res: Response) 
         });
     }
 });
-
-app.patch('/api/connection-applications/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/connection-applications/:id/status', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { id } = req.params;
         const { status, xenRemarks } = req.body;
-
         if (!status) {
             return res.status(400).json({
                 success: false,
                 message: 'Status is required',
             });
         }
-
-        const updateData: any = {
+        const updateData = {
             status,
             updatedAt: new Date(),
         };
-        if (xenRemarks) updateData.xenRemarks = xenRemarks;
-
-        const result = await applicationsCollection.updateOne(
-            { applicationId: id },
-            { $set: updateData }
-        );
-
+        if (xenRemarks)
+            updateData.xenRemarks = xenRemarks;
+        const result = await applicationsCollection.updateOne({ applicationId: id }, { $set: updateData });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Application not found',
             });
         }
-
         const updated = await applicationsCollection.findOne({ applicationId: id });
-
         res.json({
             success: true,
             message: `Application ${status}`,
             data: updated,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Update application error:', error);
         res.status(500).json({
             success: false,
@@ -1123,22 +980,19 @@ app.patch('/api/connection-applications/:id/status', async (req: Request, res: R
         });
     }
 });
-
-app.patch('/api/connection-applications/:id/implement', async (req: Request, res: Response) => {
+app.patch('/api/connection-applications/:id/implement', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const metersCollection = db.collection('meters');
         const { id } = req.params;
         const { assignedMeterNo, connectionWingRemarks } = req.body;
-
         if (!assignedMeterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required',
             });
         }
-
         const existingMeter = await metersCollection.findOne({ meterNo: assignedMeterNo });
         if (existingMeter) {
             return res.status(400).json({
@@ -1146,41 +1000,34 @@ app.patch('/api/connection-applications/:id/implement', async (req: Request, res
                 message: 'Meter number already exists',
             });
         }
-
-        const result = await applicationsCollection.updateOne(
-            { applicationId: id },
-            {
-                $set: {
-                    status: 'implemented',
-                    assignedMeterNo,
-                    connectionWingRemarks: connectionWingRemarks || '',
-                    implementedAt: new Date(),
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        const result = await applicationsCollection.updateOne({ applicationId: id }, {
+            $set: {
+                status: 'implemented',
+                assignedMeterNo,
+                connectionWingRemarks: connectionWingRemarks || '',
+                implementedAt: new Date(),
+                updatedAt: new Date(),
+            },
+        });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Application not found',
             });
         }
-
         await metersCollection.insertOne({
             meterNo: assignedMeterNo,
             status: 'active',
             createdAt: new Date(),
         });
-
         const updated = await applicationsCollection.findOne({ applicationId: id });
-
         res.json({
             success: true,
             message: 'Connection implemented successfully',
             data: updated,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Implement connection error:', error);
         res.status(500).json({
             success: false,
@@ -1188,27 +1035,24 @@ app.patch('/api/connection-applications/:id/implement', async (req: Request, res
         });
     }
 });
-
-app.delete('/api/connection-applications/:id', async (req: Request, res: Response) => {
+app.delete('/api/connection-applications/:id', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { id } = req.params;
-
         const result = await applicationsCollection.deleteOne({ applicationId: id });
-
         if (result.deletedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Application not found',
             });
         }
-
         res.json({
             success: true,
             message: 'Application deleted successfully',
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Delete application error:', error);
         res.status(500).json({
             success: false,
@@ -1216,28 +1060,24 @@ app.delete('/api/connection-applications/:id', async (req: Request, res: Respons
         });
     }
 });
-
 // =====================================================
 // 7. CONNECTION WING ROUTES
 // =====================================================
-
-app.get('/api/connection-wing/applications', async (req: Request, res: Response) => {
+app.get('/api/connection-wing/applications', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
-
         const applications = await applicationsCollection
             .find({})
             .sort({ updatedAt: -1 })
             .toArray();
-
         console.log(`📦 Connection Wing: Found ${applications.length} total applications`);
-
         res.json({
             success: true,
             data: applications,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get wing applications error:', error);
         res.status(500).json({
             success: false,
@@ -1245,23 +1085,19 @@ app.get('/api/connection-wing/applications', async (req: Request, res: Response)
         });
     }
 });
-
-app.patch('/api/connection-wing/applications/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/connection-wing/applications/:id/status', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const { id } = req.params;
         const { status, connectionWingRemarks } = req.body;
-
         console.log(`🔍 Updating application ${id} to status: ${status}`);
-
         if (!status) {
             return res.status(400).json({
                 success: false,
                 message: 'Status is required',
             });
         }
-
         const validStatuses = ['forwarded_to_wing', 'team_sent', 'connection_completed'];
         if (!validStatuses.includes(status)) {
             return res.status(400).json({
@@ -1269,34 +1105,28 @@ app.patch('/api/connection-wing/applications/:id/status', async (req: Request, r
                 message: 'Invalid status. Allowed: forwarded_to_wing, team_sent, connection_completed',
             });
         }
-
-        const updateData: any = {
+        const updateData = {
             status,
             updatedAt: new Date(),
         };
-        if (connectionWingRemarks) updateData.connectionWingRemarks = connectionWingRemarks;
-
-        const result = await applicationsCollection.updateOne(
-            { applicationId: id },
-            { $set: updateData }
-        );
-
+        if (connectionWingRemarks)
+            updateData.connectionWingRemarks = connectionWingRemarks;
+        const result = await applicationsCollection.updateOne({ applicationId: id }, { $set: updateData });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Application not found',
             });
         }
-
         const updated = await applicationsCollection.findOne({ applicationId: id });
         console.log(`✅ Application ${id} updated to ${status}`);
-
         res.json({
             success: true,
             message: `Application ${status}`,
             data: updated,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Update wing application error:', error);
         res.status(500).json({
             success: false,
@@ -1304,44 +1134,25 @@ app.patch('/api/connection-wing/applications/:id/status', async (req: Request, r
         });
     }
 });
-
 // =====================================================
 // ASSIGN METER TO APPLICATION
 // =====================================================
-app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Request, res: Response) => {
+app.post('/api/connection-wing/applications/:id/assign-meter', async (req, res) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
         const { id } = req.params;
-        const {
-            meterNo,
-            meterSerialNo,
-            meterType,
-            manufacturer,
-            feederName,
-            connectionDate,
-            consumerType,
-            initialReading,
-            specialNote,
-            consumerName,
-            address,
-            mobile,
-            email,
-            connectionWingRemarks
-        } = req.body;
-
+        const { meterNo, meterSerialNo, meterType, manufacturer, feederName, connectionDate, consumerType, initialReading, specialNote, consumerName, address, mobile, email, connectionWingRemarks } = req.body;
         console.log(`🔍 Assigning meter to application: ${id}`);
         console.log(`📦 Meter No: ${meterNo}`);
-
         if (!meterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required',
             });
         }
-
         const application = await applicationsCollection.findOne({ applicationId: id });
         if (!application) {
             return res.status(404).json({
@@ -1349,40 +1160,37 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
                 message: 'Application not found',
             });
         }
-
         const existingMeter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (existingMeter) {
             if (!existingMeter.isClaimed) {
-                await metersCollection.updateOne(
-                    { meterNo },
-                    {
-                        $set: {
-                            consumerName: consumerName || application.applicantName,
-                            email: email || application.email,
-                            mobile: mobile || application.mobile,
-                            address: address || application.address,
-                            consumerType: consumerType || application.connectionType,
-                            feederName: feederName || application.feederName,
-                            status: 'active',
-                            isClaimed: true,
-                            claimedBy: application.consumerId,
-                            claimedAt: new Date(),
-                            userId: application.consumerId,
-                            updatedAt: new Date(),
-                        }
+                await metersCollection.updateOne({ meterNo }, {
+                    $set: {
+                        consumerName: consumerName || application.applicantName,
+                        email: email || application.email,
+                        mobile: mobile || application.mobile,
+                        address: address || application.address,
+                        consumerType: consumerType || application.connectionType,
+                        feederName: feederName || application.feederName,
+                        status: 'active',
+                        isClaimed: true,
+                        claimedBy: application.consumerId,
+                        claimedAt: new Date(),
+                        userId: application.consumerId,
+                        updatedAt: new Date(),
                     }
-                );
+                });
                 console.log(`✅ Existing meter ${meterNo} updated and claimed`);
-            } else {
+            }
+            else {
                 return res.status(400).json({
                     success: false,
                     message: `Meter ${meterNo} is already claimed`,
                 });
             }
-        } else {
+        }
+        else {
             const meterData = {
                 meterNo: meterNo.trim(),
                 meterSerialNo: meterSerialNo || '',
@@ -1408,24 +1216,18 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
                 createdAt: new Date(),
                 updatedAt: new Date(),
             };
-
             await metersCollection.insertOne(meterData);
             console.log(`✅ New meter ${meterNo} created and assigned`);
         }
-
-        await applicationsCollection.updateOne(
-            { applicationId: id },
-            {
-                $set: {
-                    status: 'implemented',
-                    assignedMeterNo: meterNo,
-                    implementedAt: new Date(),
-                    connectionWingRemarks: connectionWingRemarks || 'Meter assigned and connection completed',
-                    updatedAt: new Date(),
-                }
+        await applicationsCollection.updateOne({ applicationId: id }, {
+            $set: {
+                status: 'implemented',
+                assignedMeterNo: meterNo,
+                implementedAt: new Date(),
+                connectionWingRemarks: connectionWingRemarks || 'Meter assigned and connection completed',
+                updatedAt: new Date(),
             }
-        );
-
+        });
         if (application.consumerId && application.consumerId !== 'unknown') {
             try {
                 const userQuery = createIdQuery(application.consumerId);
@@ -1434,26 +1236,22 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
                     let userMeters = user.meters || [];
                     if (!userMeters.includes(meterNo)) {
                         userMeters.push(meterNo);
-                        await userCollection.updateOne(
-                            userQuery,
-                            {
-                                $set: {
-                                    meterNo: userMeters[0] || meterNo,
-                                    meters: userMeters,
-                                    updatedAt: new Date(),
-                                }
+                        await userCollection.updateOne(userQuery, {
+                            $set: {
+                                meterNo: userMeters[0] || meterNo,
+                                meters: userMeters,
+                                updatedAt: new Date(),
                             }
-                        );
+                        });
                         console.log(`✅ Meter ${meterNo} added to user's list`);
                     }
                 }
-            } catch (userError) {
+            }
+            catch (userError) {
                 console.log('⚠️ Could not update user, but meter was assigned:', userError);
             }
         }
-
         const updated = await applicationsCollection.findOne({ applicationId: id });
-
         res.json({
             success: true,
             message: 'Meter assigned successfully',
@@ -1462,8 +1260,8 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
                 meterNo: meterNo,
             },
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Assign meter error:', error);
         res.status(500).json({
             success: false,
@@ -1472,92 +1270,81 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
         });
     }
 });
-
 // =====================================================
 // 8. METER ROUTES
 // =====================================================
-
 // =====================================================
 // GET ALL METERS (For Billing Wings)
 // =====================================================
-app.get('/api/meters/all', async (req: Request, res: Response) => {
+app.get('/api/meters/all', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
         const billsCollection = db.collection('bills');
-
         const meters = await metersCollection
             .find({})
             .sort({ createdAt: -1 })
             .toArray();
-
         const currentMonth = new Date().toLocaleString('default', { month: 'long' });
         const currentYear = new Date().getFullYear().toString();
         const currentBillingMonth = `${currentMonth} ${currentYear}`;
-
-        const enrichedMeters = await Promise.all(
-            meters.map(async (meter) => {
-                let userInfo = {
-                    name: 'N/A',
-                    email: 'N/A',
-                    mobile: 'N/A',
-                    address: 'N/A',
-                    isRegistered: false,
-                };
-
-                if (meter.isClaimed && meter.claimedBy) {
-                    try {
-                        const query = createIdQuery(meter.claimedBy);
-                        const user = await userCollection.findOne(query);
-                        if (user) {
-                            userInfo = {
-                                name: user.name || meter.consumerName || 'N/A',
-                                email: user.email || 'N/A',
-                                mobile: user.mobile || 'N/A',
-                                address: user.address || meter.address || 'N/A',
-                                isRegistered: true,
-                            };
-                        }
-                    } catch (error) {
-                        console.error(`Error fetching user for meter ${meter.meterNo}:`, error);
-                    }
-                }
-
-                // ✅ Fixed: Type annotation added
-                let billStatus = 'pending';
-                let existingBill: any = null;
-
+        const enrichedMeters = await Promise.all(meters.map(async (meter) => {
+            let userInfo = {
+                name: 'N/A',
+                email: 'N/A',
+                mobile: 'N/A',
+                address: 'N/A',
+                isRegistered: false,
+            };
+            if (meter.isClaimed && meter.claimedBy) {
                 try {
-                    existingBill = await billsCollection.findOne({
-                        meterNo: meter.meterNo,
-                        billingMonth: currentBillingMonth,
-                    });
-
-                    if (existingBill) {
-                        billStatus = existingBill.status || 'generated';
+                    const query = createIdQuery(meter.claimedBy);
+                    const user = await userCollection.findOne(query);
+                    if (user) {
+                        userInfo = {
+                            name: user.name || meter.consumerName || 'N/A',
+                            email: user.email || 'N/A',
+                            mobile: user.mobile || 'N/A',
+                            address: user.address || meter.address || 'N/A',
+                            isRegistered: true,
+                        };
                     }
-                } catch (error) {
-                    console.error(`Error checking bill for meter ${meter.meterNo}:`, error);
                 }
-
-                return {
-                    ...meter,
-                    userInfo,
-                    billStatus,
-                    billId: existingBill?.billId || null,
-                    billAmount: existingBill?.grandTotal || existingBill?.totalAmount || null,
-                };
-            })
-        );
-
+                catch (error) {
+                    console.error(`Error fetching user for meter ${meter.meterNo}:`, error);
+                }
+            }
+            // ✅ Fixed: Type annotation added
+            let billStatus = 'pending';
+            let existingBill = null;
+            try {
+                existingBill = await billsCollection.findOne({
+                    meterNo: meter.meterNo,
+                    billingMonth: currentBillingMonth,
+                });
+                if (existingBill) {
+                    billStatus = existingBill.status || 'generated';
+                }
+            }
+            catch (error) {
+                console.error(`Error checking bill for meter ${meter.meterNo}:`, error);
+            }
+            return {
+                ...meter,
+                userInfo,
+                billStatus,
+                billId: existingBill?.billId || null,
+                billAmount: existingBill?.grandTotal || existingBill?.totalAmount || null,
+            };
+        }));
         res.json({
             success: true,
             data: enrichedMeters,
             total: enrichedMeters.length,
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Get all meters error:', error);
         res.status(500).json({
             success: false,
@@ -1565,19 +1352,15 @@ app.get('/api/meters/all', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-assignment/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const { meterNo } = req.params;
-
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
-
         const consumer = await consumersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (consumer) {
             return res.json({
                 success: true,
@@ -1594,11 +1377,9 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
                 }
             });
         }
-
         const user = await userCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (user) {
             return res.json({
                 success: true,
@@ -1615,7 +1396,6 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
                 }
             });
         }
-
         return res.json({
             success: true,
             data: {
@@ -1623,8 +1403,8 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
                 message: 'Meter is available'
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Check meter assignment error:', error);
         res.status(500).json({
             success: false,
@@ -1633,26 +1413,21 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
         });
     }
 });
-
-app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-availability/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const { meterNo } = req.params;
-
         console.log(`🔍 Checking meter availability: ${meterNo}`);
-
         if (!meterNo || meterNo.trim() === '') {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required'
             });
         }
-
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo.trim()}$`, 'i') }
         });
-
         if (meter) {
             console.log(`❌ Meter ${meterNo} already exists`);
             return res.json({
@@ -1670,7 +1445,8 @@ app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Res
                     manufacturer: meter.manufacturer || '',
                 }
             });
-        } else {
+        }
+        else {
             console.log(`✅ Meter ${meterNo} is available`);
             return res.json({
                 success: true,
@@ -1681,8 +1457,8 @@ app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Res
                 }
             });
         }
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Check meter availability error:', error);
         res.status(500).json({
             success: false,
@@ -1691,47 +1467,26 @@ app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Res
         });
     }
 });
-
-app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) => {
+app.post('/api/connection-wing/add-meter', async (req, res) => {
     try {
         await connectDB();
-
-        const {
-            meterNo,
-            meterSerialNo,
-            meterType,
-            manufacturer,
-            feederName,
-            connectionDate,
-            consumerType,
-            initialReading,
-            specialNote,
-            consumerName,
-            address,
-            mobile,
-            email,
-        } = req.body;
-
+        const { meterNo, meterSerialNo, meterType, manufacturer, feederName, connectionDate, consumerType, initialReading, specialNote, consumerName, address, mobile, email, } = req.body;
         if (!meterNo || !feederName || !connectionDate) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number, feeder, and connection date are required',
             });
         }
-
         const metersCollection = db.collection('meters');
-
         const existingMeter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo.trim()}$`, 'i') }
         });
-
         if (existingMeter) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number already exists',
             });
         }
-
         const newMeter = {
             meterNo: meterNo.trim(),
             meterSerialNo: meterSerialNo || '',
@@ -1754,9 +1509,7 @@ app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) =
             createdAt: new Date(),
             updatedAt: new Date(),
         };
-
         const result = await metersCollection.insertOne(newMeter);
-
         res.status(201).json({
             success: true,
             message: 'Meter added successfully. Consumer can now claim it during registration.',
@@ -1765,8 +1518,8 @@ app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) =
                 _id: result.insertedId,
             },
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Add meter error:', error);
         res.status(500).json({
             success: false,
@@ -1775,25 +1528,23 @@ app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) =
         });
     }
 });
-
-app.get('/api/meters/available', async (req: Request, res: Response) => {
+app.get('/api/meters/available', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
-
         const meters = await metersCollection
             .find({
-                isClaimed: false,
-                status: 'pending_claim'
-            })
+            isClaimed: false,
+            status: 'pending_claim'
+        })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: meters,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get available meters error:', error);
         res.status(500).json({
             success: false,
@@ -1801,38 +1552,31 @@ app.get('/api/meters/available', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/search/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const consumersCollection = db.collection('consumers');
         const { meterNo } = req.params;
-
         console.log(`🔍 Searching for meter: ${meterNo}`);
-
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (!meter) {
             return res.status(404).json({
                 success: false,
                 message: 'Meter not found in the system'
             });
         }
-
         if (meter.isClaimed) {
             return res.status(400).json({
                 success: false,
                 message: 'This meter is already claimed'
             });
         }
-
         const consumer = await consumersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         const responseData = {
             ...meter,
             consumerName: consumer?.name || meter.consumerName || 'Pending',
@@ -1840,15 +1584,13 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
             address: consumer?.address || meter.address || '',
             isClaimed: meter.isClaimed || false,
         };
-
         console.log(`✅ Meter found: ${meterNo}`);
-
         res.json({
             success: true,
             data: responseData,
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Search meter error:', error);
         res.status(500).json({
             success: false,
@@ -1857,36 +1599,30 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-availability-for-user/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
         const { meterNo } = req.params;
-        const userId = req.query.userId as string;
-
+        const userId = req.query.userId;
         console.log(`🔍 Checking meter availability for user: ${meterNo}, userId: ${userId}`);
-
         if (!meterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required'
             });
         }
-
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (!meter) {
             return res.status(404).json({
                 success: false,
                 message: 'Meter not found in the system'
             });
         }
-
         if (meter.isClaimed) {
             if (meter.claimedBy === userId) {
                 return res.json({
@@ -1907,11 +1643,9 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
                 }
             });
         }
-
         const consumer = await consumersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         res.json({
             success: true,
             data: {
@@ -1926,8 +1660,8 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
                 }
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Check meter availability error:', error);
         res.status(500).json({
             success: false,
@@ -1936,34 +1670,29 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
         });
     }
 });
-
-app.post('/api/meters/claim', async (req: Request, res: Response) => {
+app.post('/api/meters/claim', async (req, res) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
         const { meterNo, consumerId, consumerName, email, mobile } = req.body;
-
         if (!meterNo || !consumerId) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number and consumer ID are required',
             });
         }
-
         const meter = await metersCollection.findOne({
             meterNo,
             isClaimed: false,
             status: 'pending_claim',
         });
-
         if (!meter) {
             return res.status(404).json({
                 success: false,
                 message: 'Meter not found or already claimed',
             });
         }
-
         const existingUser = await userCollection.findOne({ meterNo });
         if (existingUser) {
             return res.status(400).json({
@@ -1971,46 +1700,36 @@ app.post('/api/meters/claim', async (req: Request, res: Response) => {
                 message: 'This meter is already assigned to another user',
             });
         }
-
-        await metersCollection.updateOne(
-            { meterNo },
-            {
-                $set: {
-                    isClaimed: true,
-                    claimedBy: consumerId,
-                    claimedAt: new Date(),
-                    status: 'active',
-                    consumerName: consumerName || meter.consumerName,
-                    email: email || meter.email,
-                    mobile: mobile || meter.mobile,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        await metersCollection.updateOne({ meterNo }, {
+            $set: {
+                isClaimed: true,
+                claimedBy: consumerId,
+                claimedAt: new Date(),
+                status: 'active',
+                consumerName: consumerName || meter.consumerName,
+                email: email || meter.email,
+                mobile: mobile || meter.mobile,
+                updatedAt: new Date(),
+            },
+        });
         const userQuery = createIdQuery(consumerId);
-        await userCollection.updateOne(
-            userQuery,
-            {
-                $set: {
-                    meterNo,
-                    feederName: meter.feederName,
-                    userType: 'existing_consumer',
-                    isActive: true,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        await userCollection.updateOne(userQuery, {
+            $set: {
+                meterNo,
+                feederName: meter.feederName,
+                userType: 'existing_consumer',
+                isActive: true,
+                updatedAt: new Date(),
+            },
+        });
         const updatedMeter = await metersCollection.findOne({ meterNo });
-
         res.json({
             success: true,
             message: 'Meter claimed successfully!',
             data: updatedMeter,
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Claim meter error:', error);
         res.status(500).json({
             success: false,
@@ -2018,22 +1737,19 @@ app.post('/api/meters/claim', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) => {
+app.post('/api/meters/claim-for-consumer', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
         const metersCollection = db.collection('meters');
         const { meterNo, userId } = req.body;
-
         if (!meterNo || !userId) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number and user ID are required'
             });
         }
-
         const consumer = await consumersCollection.findOne({ meterNo });
         if (!consumer) {
             return res.status(404).json({
@@ -2041,16 +1757,13 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
                 message: 'Consumer not found with this meter number'
             });
         }
-
         if (consumer.isClaimed) {
             return res.status(400).json({
                 success: false,
                 message: 'This consumer is already claimed by another user'
             });
         }
-
         const userQuery = createIdQuery(userId);
-
         const user = await userCollection.findOne(userQuery);
         if (!user) {
             return res.status(404).json({
@@ -2058,33 +1771,26 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
                 message: 'User not found'
             });
         }
-
         let userMeters = user.meters || [];
         let claimedMeters = user.claimedMeters || [];
-
         if (userMeters.includes(meterNo)) {
             return res.status(400).json({
                 success: false,
                 message: 'You have already claimed this meter'
             });
         }
-
-        await consumersCollection.updateOne(
-            { meterNo },
-            {
-                $set: {
-                    isClaimed: true,
-                    claimedBy: userId,
-                    claimedAt: new Date(),
-                    isRegistered: true,
-                    registeredBy: userId,
-                    registeredAt: new Date(),
-                    userId: userId,
-                    updatedAt: new Date(),
-                }
+        await consumersCollection.updateOne({ meterNo }, {
+            $set: {
+                isClaimed: true,
+                claimedBy: userId,
+                claimedAt: new Date(),
+                isRegistered: true,
+                registeredBy: userId,
+                registeredAt: new Date(),
+                userId: userId,
+                updatedAt: new Date(),
             }
-        );
-
+        });
         userMeters.push(meterNo);
         claimedMeters.push({
             meterNo: meterNo,
@@ -2094,47 +1800,37 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
             isPrimary: userMeters.length === 1,
             status: 'active'
         });
-
-        await userCollection.updateOne(
-            userQuery,
-            {
-                $set: {
-                    name: user.name || consumer.name,
-                    email: user.email || consumer.email,
-                    mobile: user.mobile || consumer.mobile,
-                    nidNo: user.nidNo || consumer.nidNo,
-                    address: user.address || consumer.address,
-                    meterNo: userMeters[0] || meterNo,
-                    meters: userMeters,
-                    claimedMeters: claimedMeters,
-                    feederName: user.feederName || consumer.feederName,
-                    consumerType: user.consumerType || consumer.consumerType,
-                    userType: 'existing_consumer',
-                    isActive: true,
-                    updatedAt: new Date(),
-                }
+        await userCollection.updateOne(userQuery, {
+            $set: {
+                name: user.name || consumer.name,
+                email: user.email || consumer.email,
+                mobile: user.mobile || consumer.mobile,
+                nidNo: user.nidNo || consumer.nidNo,
+                address: user.address || consumer.address,
+                meterNo: userMeters[0] || meterNo,
+                meters: userMeters,
+                claimedMeters: claimedMeters,
+                feederName: user.feederName || consumer.feederName,
+                consumerType: user.consumerType || consumer.consumerType,
+                userType: 'existing_consumer',
+                isActive: true,
+                updatedAt: new Date(),
             }
-        );
-
-        await metersCollection.updateOne(
-            { meterNo },
-            {
-                $set: {
-                    isClaimed: true,
-                    claimedBy: userId,
-                    claimedAt: new Date(),
-                    status: 'active',
-                    consumerName: consumer.name,
-                    userId: userId,
-                    updatedAt: new Date(),
-                }
+        });
+        await metersCollection.updateOne({ meterNo }, {
+            $set: {
+                isClaimed: true,
+                claimedBy: userId,
+                claimedAt: new Date(),
+                status: 'active',
+                consumerName: consumer.name,
+                userId: userId,
+                updatedAt: new Date(),
             }
-        );
-
+        });
         const updatedConsumer = await consumersCollection.findOne({ meterNo });
         const updatedUser = await userCollection.findOne(userQuery);
         const updatedMeter = await metersCollection.findOne({ meterNo });
-
         res.json({
             success: true,
             message: 'Meter claimed successfully!',
@@ -2145,8 +1841,8 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
                 totalMeters: userMeters.length
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Claim meter error:', error);
         res.status(500).json({
             success: false,
@@ -2155,22 +1851,18 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
         });
     }
 });
-
-app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
+app.patch('/api/user/primary-meter', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userId, meterNo } = req.body;
-
         if (!userId || !meterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'User ID and meter number are required'
             });
         }
-
         const query = createIdQuery(userId);
-
         const user = await userCollection.findOne(query);
         if (!user) {
             return res.status(404).json({
@@ -2178,48 +1870,36 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
                 message: 'User not found'
             });
         }
-
         if (!user.meters || !user.meters.includes(meterNo)) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter not found in user\'s list'
             });
         }
-
-        await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    meterNo: meterNo,
-                    updatedAt: new Date()
-                }
+        await userCollection.updateOne(query, {
+            $set: {
+                meterNo: meterNo,
+                updatedAt: new Date()
             }
-        );
-
-        const claimedMeters = user.claimedMeters.map((m: any) => ({
+        });
+        const claimedMeters = user.claimedMeters.map((m) => ({
             ...m,
             isPrimary: m.meterNo === meterNo
         }));
-
-        await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    claimedMeters: claimedMeters,
-                    updatedAt: new Date()
-                }
+        await userCollection.updateOne(query, {
+            $set: {
+                claimedMeters: claimedMeters,
+                updatedAt: new Date()
             }
-        );
-
+        });
         const updatedUser = await userCollection.findOne(query);
-
         res.json({
             success: true,
             message: 'Primary meter updated successfully',
             data: updatedUser
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Set primary meter error:', error);
         res.status(500).json({
             success: false,
@@ -2227,16 +1907,13 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
+app.get('/api/user/meters/:userId', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const metersCollection = db.collection('meters');
         const { userId } = req.params;
-
         const query = createIdQuery(userId);
-
         const user = await userCollection.findOne(query);
         if (!user) {
             return res.status(404).json({
@@ -2244,20 +1921,18 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
                 message: 'User not found'
             });
         }
-
         const meters = user.meters || [];
         const claimedMeters = user.claimedMeters || [];
-
         const meterDetails = await metersCollection
             .find({ meterNo: { $in: meters } })
             .toArray();
-
         const sortedMeters = meterDetails.sort((a, b) => {
-            if (a.meterNo === user.meterNo) return -1;
-            if (b.meterNo === user.meterNo) return 1;
+            if (a.meterNo === user.meterNo)
+                return -1;
+            if (b.meterNo === user.meterNo)
+                return 1;
             return 0;
         });
-
         res.json({
             success: true,
             data: {
@@ -2267,8 +1942,8 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
                 totalMeters: meters.length
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get user meters error:', error);
         res.status(500).json({
             success: false,
@@ -2276,13 +1951,11 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/consumers/status/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const { meterNo } = req.params;
-
         const consumer = await consumersCollection.findOne({ meterNo });
         if (!consumer) {
             return res.status(404).json({
@@ -2290,7 +1963,6 @@ app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) =>
                 message: 'Consumer not found'
             });
         }
-
         res.json({
             success: true,
             data: {
@@ -2301,8 +1973,8 @@ app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) =>
                 status: consumer.isRegistered ? 'Registered' : 'Pending Registration',
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get consumer status error:', error);
         res.status(500).json({
             success: false,
@@ -2310,35 +1982,29 @@ app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) =>
         });
     }
 });
-
-app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
+app.get('/api/consumers/check-unique', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
         const { field, value } = req.query;
-
         console.log(`🔍 Checking uniqueness: ${field} = ${value}`);
-
         if (!field || !value) {
             return res.status(400).json({
                 success: false,
                 message: 'Field and value are required'
             });
         }
-
         const allowedFields = ['email', 'mobile', 'nidNo'];
-        if (!allowedFields.includes(field as string)) {
+        if (!allowedFields.includes(field)) {
             return res.status(400).json({
                 success: false,
                 message: 'Invalid field. Allowed: email, mobile, nidNo'
             });
         }
-
         const existingConsumer = await consumersCollection.findOne({
-            [field as string]: { $regex: new RegExp(`^${value}$`, 'i') }
+            [field]: { $regex: new RegExp(`^${value}$`, 'i') }
         });
-
         if (existingConsumer) {
             return res.json({
                 success: true,
@@ -2348,11 +2014,9 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
                 }
             });
         }
-
         const existingUser = await userCollection.findOne({
-            [field as string]: { $regex: new RegExp(`^${value}$`, 'i') }
+            [field]: { $regex: new RegExp(`^${value}$`, 'i') }
         });
-
         if (existingUser) {
             return res.json({
                 success: true,
@@ -2362,7 +2026,6 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
                 }
             });
         }
-
         return res.json({
             success: true,
             data: {
@@ -2370,8 +2033,8 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
                 message: `${field} is available`
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Check unique error:', error);
         res.status(500).json({
             success: false,
@@ -2380,23 +2043,20 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 9. BILLING WINGS ROUTES
 // =====================================================
-
-app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/all', async (req, res) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
         const { status, month, page = 1, limit = 10 } = req.query;
-
-        const filter: any = {};
-        if (status) filter.status = status;
-        if (month) filter.billingMonth = month;
-
+        const filter = {};
+        if (status)
+            filter.status = status;
+        if (month)
+            filter.billingMonth = month;
         const skip = (Number(page) - 1) * Number(limit);
-
         const [bills, total] = await Promise.all([
             billsCollection
                 .find(filter)
@@ -2406,9 +2066,7 @@ app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
                 .toArray(),
             billsCollection.countDocuments(filter),
         ]);
-
         console.log(`📦 Found ${bills.length} bills`);
-
         res.json({
             success: true,
             data: bills,
@@ -2419,7 +2077,8 @@ app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
                 totalPages: Math.ceil(total / Number(limit)),
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get all bills error:', error);
         res.status(500).json({
             success: false,
@@ -2428,23 +2087,21 @@ app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/consumer/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
         const { consumerId } = req.params;
-
         const bills = await billsCollection
             .find({ consumerId })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: bills,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get consumer bills error:', error);
         res.status(500).json({
             success: false,
@@ -2452,23 +2109,21 @@ app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Res
         });
     }
 });
-
-app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/meter/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
         const { meterNo } = req.params;
-
         const bills = await billsCollection
             .find({ meterNo })
             .sort({ createdAt: -1 })
             .toArray();
-
         res.json({
             success: true,
             data: bills,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get meter bills error:', error);
         res.status(500).json({
             success: false,
@@ -2476,27 +2131,24 @@ app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response)
         });
     }
 });
-
-app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/:billId', async (req, res) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
         const { billId } = req.params;
-
         const bill = await billsCollection.findOne({ billId });
-
         if (!bill) {
             return res.status(404).json({
                 success: false,
                 message: 'Bill not found',
             });
         }
-
         res.json({
             success: true,
             data: bill,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get bill error:', error);
         res.status(500).json({
             success: false,
@@ -2504,42 +2156,35 @@ app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) => {
+app.patch('/api/billing/bills/:billId/pay', async (req, res) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
         const { billId } = req.params;
         const { paymentMethod } = req.body;
-
-        const result = await billsCollection.updateOne(
-            { billId },
-            {
-                $set: {
-                    status: 'paid',
-                    isPaid: true,
-                    paidAt: new Date(),
-                    paymentMethod: paymentMethod || 'Online',
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        const result = await billsCollection.updateOne({ billId }, {
+            $set: {
+                status: 'paid',
+                isPaid: true,
+                paidAt: new Date(),
+                paymentMethod: paymentMethod || 'Online',
+                updatedAt: new Date(),
+            },
+        });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'Bill not found',
             });
         }
-
         const updatedBill = await billsCollection.findOne({ billId });
-
         res.json({
             success: true,
             message: 'Bill paid successfully',
             data: updatedBill,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Pay bill error:', error);
         res.status(500).json({
             success: false,
@@ -2547,31 +2192,16 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
         });
     }
 });
-
 // =====================================================
 // GENERATE BILL
 // =====================================================
 // =====================================================
 // GENERATE BILL (Updated - Meter Based)
 // =====================================================
-app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
+app.post('/api/billing/generate-bill', async (req, res) => {
     try {
         await connectDB();
-
-        const {
-            meterNo,
-            previousReading,
-            currentReading,
-            unitsConsumed,
-            ratePerUnit,
-            totalAmount,
-            billingMonth,
-            dueDate,
-            unpaidAmount,
-            lateFee,
-            grandTotal,
-        } = req.body;
-
+        const { meterNo, previousReading, currentReading, unitsConsumed, ratePerUnit, totalAmount, billingMonth, dueDate, unpaidAmount, lateFee, grandTotal, } = req.body;
         console.log('📦 Received bill generation request:', {
             meterNo,
             previousReading,
@@ -2580,73 +2210,61 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
             billingMonth,
             dueDate,
         });
-
         if (!meterNo) {
             return res.status(400).json({
                 success: false,
                 message: 'Meter number is required',
             });
         }
-
         if (!billingMonth) {
             return res.status(400).json({
                 success: false,
                 message: 'Billing month is required',
             });
         }
-
         if (!dueDate) {
             return res.status(400).json({
                 success: false,
                 message: 'Due date is required',
             });
         }
-
         if (previousReading === undefined || previousReading === null) {
             return res.status(400).json({
                 success: false,
                 message: 'Previous reading is required',
             });
         }
-
         if (currentReading === undefined || currentReading === null) {
             return res.status(400).json({
                 success: false,
                 message: 'Current reading is required',
             });
         }
-
         const metersCollection = db.collection('meters');
         const userCollection = db.collection('user');
         const billsCollection = db.collection('bills');
-
         const meter = await metersCollection.findOne({
             meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') }
         });
-
         if (!meter) {
             return res.status(404).json({
                 success: false,
                 message: 'Meter not found',
             });
         }
-
         console.log(`🔍 Meter found: ${meter.meterNo}, isClaimed: ${meter.isClaimed}`);
-
         // ✅ Fixed: Explicit type declarations
-        let consumerName: string = 'N/A';
-        let consumerEmail: string = 'N/A';
-        let consumerMobile: string = 'N/A';
-        let consumerAddress: string = 'N/A';
-        let consumerType: string = meter.consumerType || 'residential';
-        let consumerId: string | null = null;
-        let isRegisteredUser: boolean = false;
-
+        let consumerName = 'N/A';
+        let consumerEmail = 'N/A';
+        let consumerMobile = 'N/A';
+        let consumerAddress = 'N/A';
+        let consumerType = meter.consumerType || 'residential';
+        let consumerId = null;
+        let isRegisteredUser = false;
         if (meter.isClaimed && meter.claimedBy) {
             try {
                 const query = createIdQuery(meter.claimedBy);
                 const user = await userCollection.findOne(query);
-
                 if (user) {
                     consumerName = user.name || meter.consumerName || 'N/A';
                     consumerEmail = user.email || 'N/A';
@@ -2656,21 +2274,24 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
                     consumerType = user.consumerType || meter.consumerType || 'residential';
                     isRegisteredUser = true;
                     console.log(`✅ Meter ${meterNo} is claimed by registered user: ${consumerName}`);
-                } else {
+                }
+                else {
                     consumerName = meter.consumerName || 'N/A';
                     consumerEmail = meter.email || 'N/A';
                     consumerMobile = meter.mobile || 'N/A';
                     consumerAddress = meter.address || 'N/A';
                     console.log(`⚠️ Meter ${meterNo} is claimed but user not found in user collection`);
                 }
-            } catch (error) {
+            }
+            catch (error) {
                 console.error('Error fetching user:', error);
                 consumerName = meter.consumerName || 'N/A';
                 consumerEmail = meter.email || 'N/A';
                 consumerMobile = meter.mobile || 'N/A';
                 consumerAddress = meter.address || 'N/A';
             }
-        } else {
+        }
+        else {
             consumerName = 'N/A';
             consumerEmail = 'N/A';
             consumerMobile = 'N/A';
@@ -2678,22 +2299,18 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
             isRegisteredUser = false;
             console.log(`⚪ Meter ${meterNo} is not claimed. Bill will be generated with N/A.`);
         }
-
         // Check if bill already exists
         const existingBill = await billsCollection.findOne({
             meterNo,
             billingMonth,
         });
-
         if (existingBill) {
             return res.status(400).json({
                 success: false,
                 message: `Bill already exists for meter ${meterNo} for ${billingMonth}`,
             });
         }
-
         const billId = `B-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 999) + 1).padStart(3, '0')}`;
-
         const newBill = {
             billId,
             meterNo,
@@ -2722,27 +2339,19 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
             createdAt: new Date(),
             updatedAt: new Date(),
         };
-
         const result = await billsCollection.insertOne(newBill);
-
-        await metersCollection.updateOne(
-            { meterNo },
-            {
-                $set: {
-                    previousReading: Number(previousReading),
-                    currentReading: Number(currentReading),
-                    lastBillingMonth: billingMonth,
-                    updatedAt: new Date(),
-                }
+        await metersCollection.updateOne({ meterNo }, {
+            $set: {
+                previousReading: Number(previousReading),
+                currentReading: Number(currentReading),
+                lastBillingMonth: billingMonth,
+                updatedAt: new Date(),
             }
-        );
-
+        });
         const savedBill = await billsCollection.findOne({ _id: result.insertedId });
-
         console.log(`✅ Bill ${billId} generated for meter ${meterNo}`);
         console.log(`📊 Consumer: ${consumerName} (${isRegisteredUser ? 'Registered' : meter.isClaimed ? 'Unregistered' : 'N/A'})`);
         console.log(`💰 Amount: ৳${Number(newBill.grandTotal).toLocaleString()}`);
-
         res.status(201).json({
             success: true,
             message: 'Bill generated successfully',
@@ -2756,8 +2365,8 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
                 consumerAddress,
             }
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Generate bill error:', error);
         res.status(500).json({
             success: false,
@@ -2766,38 +2375,35 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 10. CONSUMER ROUTES (Billing)
 // =====================================================
-
-app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/all', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
-
         const consumers = await consumersCollection
             .find({
-                role: 'consumer',
-                isActive: true
-            })
+            role: 'consumer',
+            isActive: true
+        })
             .sort({ name: 1 })
             .toArray();
-
         console.log(`👥 Found ${consumers.length} active consumers`);
-
-        const processedConsumers = consumers.map((consumer: any) => {
+        const processedConsumers = consumers.map((consumer) => {
             let status = 'Pending Registration';
             if (consumer.isRegistered && consumer.isClaimed) {
                 status = 'Registered & Claimed';
-            } else if (consumer.isRegistered && !consumer.isClaimed) {
+            }
+            else if (consumer.isRegistered && !consumer.isClaimed) {
                 status = 'Registered (Not Claimed)';
-            } else if (!consumer.isRegistered && consumer.isClaimed) {
+            }
+            else if (!consumer.isRegistered && consumer.isClaimed) {
                 status = 'Claimed (Not Registered)';
-            } else {
+            }
+            else {
                 status = 'Pending Registration';
             }
-
             return {
                 ...consumer,
                 _id: consumer._id ? consumer._id.toString() : null,
@@ -2811,12 +2417,12 @@ app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
                 meterStatus: consumer.isClaimed ? 'Claimed' : 'Not Claimed',
             };
         });
-
         res.json({
             success: true,
             data: processedConsumers,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get consumers error:', error);
         res.status(500).json({
             success: false,
@@ -2824,23 +2430,19 @@ app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const { consumerId } = req.params;
-
         const query = createIdQuery(consumerId);
         const consumer = await consumersCollection.findOne(query);
-
         if (!consumer) {
             return res.status(404).json({
                 success: false,
                 message: 'Consumer not found',
             });
         }
-
         res.json({
             success: true,
             data: {
@@ -2850,7 +2452,8 @@ app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response
                 status: consumer.isRegistered ? 'Registered' : 'Pending',
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get consumer error:', error);
         res.status(500).json({
             success: false,
@@ -2858,26 +2461,13 @@ app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response
         });
     }
 });
-
-app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.put('/api/billing/consumers/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const { consumerId } = req.params;
-        const {
-            name,
-            email,
-            mobile,
-            nidNo,
-            address,
-            consumerType,
-            feederName,
-            meterNo,
-            isActive,
-        } = req.body;
-
+        const { name, email, mobile, nidNo, address, consumerType, feederName, meterNo, isActive, } = req.body;
         const query = createIdQuery(consumerId);
-
         const existingConsumer = await consumersCollection.findOne(query);
         if (!existingConsumer) {
             return res.status(404).json({
@@ -2885,7 +2475,6 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
                 message: 'Consumer not found',
             });
         }
-
         const duplicateCheck = await consumersCollection.findOne({
             _id: { $ne: existingConsumer._id },
             $or: [
@@ -2895,20 +2484,21 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
                 { meterNo: { $regex: new RegExp(`^${meterNo}$`, 'i') } }
             ]
         });
-
         if (duplicateCheck) {
             let duplicateField = '';
-            if (duplicateCheck.email === email) duplicateField = 'email';
-            else if (duplicateCheck.mobile === mobile) duplicateField = 'mobile';
-            else if (duplicateCheck.nidNo === nidNo) duplicateField = 'NID';
-            else if (duplicateCheck.meterNo === meterNo) duplicateField = 'meter';
-
+            if (duplicateCheck.email === email)
+                duplicateField = 'email';
+            else if (duplicateCheck.mobile === mobile)
+                duplicateField = 'mobile';
+            else if (duplicateCheck.nidNo === nidNo)
+                duplicateField = 'NID';
+            else if (duplicateCheck.meterNo === meterNo)
+                duplicateField = 'meter';
             return res.status(400).json({
                 success: false,
                 message: `${duplicateField} already exists for another consumer`,
             });
         }
-
         const updateData = {
             name: name || existingConsumer.name,
             email: email || existingConsumer.email,
@@ -2922,11 +2512,8 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
             role: 'consumer',
             updatedAt: new Date(),
         };
-
         await consumersCollection.updateOne(query, { $set: updateData });
-
         const updatedConsumer = await consumersCollection.findOne(query);
-
         // ✅ Fixed: Added null check
         if (!updatedConsumer) {
             return res.status(404).json({
@@ -2934,7 +2521,6 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
                 message: 'Consumer not found after update',
             });
         }
-
         res.json({
             success: true,
             message: 'Consumer updated successfully',
@@ -2944,8 +2530,8 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
                 id: updatedConsumer._id ? updatedConsumer._id.toString() : null,
             },
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Update consumer error:', error);
         res.status(500).json({
             success: false,
@@ -2953,15 +2539,13 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
         });
     }
 });
-app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.delete('/api/billing/consumers/:consumerId', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const billsCollection = db.collection('bills');
         const { consumerId } = req.params;
-
         const query = createIdQuery(consumerId);
-
         const consumer = await consumersCollection.findOne(query);
         if (!consumer) {
             return res.status(404).json({
@@ -2969,7 +2553,6 @@ app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Respo
                 message: 'Consumer not found',
             });
         }
-
         const bills = await billsCollection.find({ meterNo: consumer.meterNo }).toArray();
         if (bills.length > 0) {
             return res.status(400).json({
@@ -2977,15 +2560,13 @@ app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Respo
                 message: `Cannot delete consumer. ${bills.length} bill(s) exist for this meter.`,
             });
         }
-
         await consumersCollection.deleteOne(query);
-
         res.json({
             success: true,
             message: 'Consumer deleted successfully',
         });
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Delete consumer error:', error);
         res.status(500).json({
             success: false,
@@ -2993,16 +2574,13 @@ app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Respo
         });
     }
 });
-
-app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/:consumerId/summary', async (req, res) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
         const billsCollection = db.collection('bills');
         const { consumerId } = req.params;
-
         const query = createIdQuery(consumerId);
-
         const consumer = await consumersCollection.findOne(query);
         if (!consumer) {
             return res.status(404).json({
@@ -3010,20 +2588,15 @@ app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: 
                 message: 'Consumer not found',
             });
         }
-
         const bills = await billsCollection
             .find({ meterNo: consumer.meterNo })
             .sort({ createdAt: -1 })
             .toArray();
-
         const totalBills = bills.length;
         const totalPaid = bills.filter(b => b.isPaid).reduce((sum, b) => sum + (b.grandTotal || 0), 0);
         const totalDue = bills.filter(b => !b.isPaid).reduce((sum, b) => sum + (b.grandTotal || 0), 0);
         const lastBill = bills.length > 0 ? bills[0] : null;
-        const lastPayment = bills.filter(b => b.isPaid).sort((a, b) =>
-            new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime()
-        )[0];
-
+        const lastPayment = bills.filter(b => b.isPaid).sort((a, b) => new Date(b.paidAt).getTime() - new Date(a.paidAt).getTime())[0];
         res.json({
             success: true,
             data: {
@@ -3039,7 +2612,8 @@ app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: 
                 },
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get consumer summary error:', error);
         res.status(500).json({
             success: false,
@@ -3047,29 +2621,25 @@ app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: 
         });
     }
 });
-
 // =====================================================
 // 11. ADMIN USER MANAGEMENT ROUTES
 // =====================================================
-
-app.get('/api/admin/users', async (req: Request, res: Response) => {
+app.get('/api/admin/users', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
-
         const users = await userCollection
             .find({})
             .project({ password: 0 })
             .sort({ createdAt: -1 })
             .toArray();
-
         console.log(`👥 Found ${users.length} users`);
-
         res.json({
             success: true,
             data: users,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Get users error:', error);
         res.status(500).json({
             success: false,
@@ -3077,28 +2647,25 @@ app.get('/api/admin/users', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.get('/api/admin/users/:userId', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userId } = req.params;
-
         const query = createIdQuery(userId);
         const user = await userCollection.findOne(query, { projection: { password: 0 } });
-
         if (!user) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found',
             });
         }
-
         res.json({
             success: true,
             data: user,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Get user error:', error);
         res.status(500).json({
             success: false,
@@ -3106,48 +2673,39 @@ app.get('/api/admin/users/:userId', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.patch('/api/admin/users/:userId/status', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/:userId/status', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userId } = req.params;
         const { isActive } = req.body;
-
         if (isActive === undefined) {
             return res.status(400).json({
                 success: false,
                 message: 'isActive field is required',
             });
         }
-
         const query = createIdQuery(userId);
-
-        const result = await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    isActive: isActive,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        const result = await userCollection.updateOne(query, {
+            $set: {
+                isActive: isActive,
+                updatedAt: new Date(),
+            },
+        });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found',
             });
         }
-
         const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
-
         res.json({
             success: true,
             message: `User ${isActive ? 'activated' : 'deactivated'} successfully`,
             data: updatedUser,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Update user status error:', error);
         res.status(500).json({
             success: false,
@@ -3155,21 +2713,18 @@ app.patch('/api/admin/users/:userId/status', async (req: Request, res: Response)
         });
     }
 });
-
-app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/:userId/role', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userId } = req.params;
         const { role } = req.body;
-
         if (!role) {
             return res.status(400).json({
                 success: false,
                 message: 'Role is required',
             });
         }
-
         const validRoles = ['admin', 'xen', 'connection_wing', 'complaint_manager', 'billing_wings', 'consumer', 'applicant'];
         if (!validRoles.includes(role)) {
             return res.status(400).json({
@@ -3177,34 +2732,27 @@ app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) =
                 message: 'Invalid role. Allowed: ' + validRoles.join(', '),
             });
         }
-
         const query = createIdQuery(userId);
-
-        const result = await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    role: role,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        const result = await userCollection.updateOne(query, {
+            $set: {
+                role: role,
+                updatedAt: new Date(),
+            },
+        });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found',
             });
         }
-
         const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
-
         res.json({
             success: true,
             message: `User role updated to ${role}`,
             data: updatedUser,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Update user role error:', error);
         res.status(500).json({
             success: false,
@@ -3212,46 +2760,30 @@ app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) =
         });
     }
 });
-
-app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.put('/api/admin/users/:userId', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userId } = req.params;
-        const {
-            name,
-            email,
-            mobile,
-            nidNo,
-            role,
-            isActive,
-            meterNo,
-            feederName,
-            address,
-        } = req.body;
-
+        const { name, email, mobile, nidNo, role, isActive, meterNo, feederName, address, } = req.body;
         if (!name || !email) {
             return res.status(400).json({
                 success: false,
                 message: 'Name and email are required',
             });
         }
-
         const query = createIdQuery(userId);
-
         const existingUser = await userCollection.findOne({
             email: { $regex: new RegExp(`^${email}$`, 'i') },
             _id: { $ne: query._id },
         });
-
         if (existingUser) {
             return res.status(400).json({
                 success: false,
                 message: 'Email already exists for another user',
             });
         }
-
-        const updateData: any = {
+        const updateData = {
             name,
             email,
             mobile: mobile || '',
@@ -3263,27 +2795,21 @@ app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
             address: address || '',
             updatedAt: new Date(),
         };
-
-        const result = await userCollection.updateOne(
-            query,
-            { $set: updateData }
-        );
-
+        const result = await userCollection.updateOne(query, { $set: updateData });
         if (result.matchedCount === 0) {
             return res.status(404).json({
                 success: false,
                 message: 'User not found',
             });
         }
-
         const updatedUser = await userCollection.findOne(query, { projection: { password: 0 } });
-
         res.json({
             success: true,
             message: 'User updated successfully',
             data: updatedUser,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Update user error:', error);
         res.status(500).json({
             success: false,
@@ -3291,16 +2817,13 @@ app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.delete('/api/admin/users/:userId', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const consumersCollection = db.collection('consumers');
         const { userId } = req.params;
-
         const query = createIdQuery(userId);
-
         const user = await userCollection.findOne(query);
         if (!user) {
             return res.status(404).json({
@@ -3308,7 +2831,6 @@ app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
                 message: 'User not found',
             });
         }
-
         if (user.role === 'admin') {
             const adminCount = await userCollection.countDocuments({ role: 'admin' });
             if (adminCount <= 1) {
@@ -3318,27 +2840,22 @@ app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
                 });
             }
         }
-
         await userCollection.deleteOne(query);
-
-        await consumersCollection.updateMany(
-            { userId: userId },
-            {
-                $set: {
-                    userId: null,
-                    isRegistered: false,
-                    registeredBy: null,
-                    registeredAt: null,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        await consumersCollection.updateMany({ userId: userId }, {
+            $set: {
+                userId: null,
+                isRegistered: false,
+                registeredBy: null,
+                registeredAt: null,
+                updatedAt: new Date(),
+            },
+        });
         res.json({
             success: true,
             message: 'User deleted successfully',
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Delete user error:', error);
         res.status(500).json({
             success: false,
@@ -3346,38 +2863,31 @@ app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/bulk', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const { userIds, isActive } = req.body;
-
         if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
             return res.status(400).json({
                 success: false,
                 message: 'User IDs array is required',
             });
         }
-
-        const objectIds = userIds.map((id: string) => {
+        const objectIds = userIds.map((id) => {
             try {
-                return new ObjectId(id);
-            } catch {
-                return id as any;
+                return new mongodb_1.ObjectId(id);
+            }
+            catch {
+                return id;
             }
         });
-
-        const result = await userCollection.updateMany(
-            { _id: { $in: objectIds } },
-            {
-                $set: {
-                    isActive: isActive,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        const result = await userCollection.updateMany({ _id: { $in: objectIds } }, {
+            $set: {
+                isActive: isActive,
+                updatedAt: new Date(),
+            },
+        });
         res.json({
             success: true,
             message: `${result.modifiedCount} user(s) ${isActive ? 'activated' : 'deactivated'}`,
@@ -3386,7 +2896,8 @@ app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
                 modified: result.modifiedCount,
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Bulk update error:', error);
         res.status(500).json({
             success: false,
@@ -3394,34 +2905,30 @@ app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
+app.delete('/api/admin/users/bulk', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const consumersCollection = db.collection('consumers');
         const { userIds } = req.body;
-
         if (!userIds || !Array.isArray(userIds) || userIds.length === 0) {
             return res.status(400).json({
                 success: false,
                 message: 'User IDs array is required',
             });
         }
-
-        const objectIds = userIds.map((id: string) => {
+        const objectIds = userIds.map((id) => {
             try {
-                return new ObjectId(id);
-            } catch {
-                return id as any;
+                return new mongodb_1.ObjectId(id);
+            }
+            catch {
+                return id;
             }
         });
-
         const adminUsers = await userCollection.find({
             _id: { $in: objectIds },
             role: 'admin',
         }).toArray();
-
         if (adminUsers.length > 0) {
             const adminCount = await userCollection.countDocuments({ role: 'admin' });
             if (adminCount <= adminUsers.length) {
@@ -3431,24 +2938,18 @@ app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
                 });
             }
         }
-
         const result = await userCollection.deleteMany({
             _id: { $in: objectIds },
         });
-
-        await consumersCollection.updateMany(
-            { userId: { $in: userIds } },
-            {
-                $set: {
-                    userId: null,
-                    isRegistered: false,
-                    registeredBy: null,
-                    registeredAt: null,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
+        await consumersCollection.updateMany({ userId: { $in: userIds } }, {
+            $set: {
+                userId: null,
+                isRegistered: false,
+                registeredBy: null,
+                registeredAt: null,
+                updatedAt: new Date(),
+            },
+        });
         res.json({
             success: true,
             message: `${result.deletedCount} user(s) deleted`,
@@ -3456,7 +2957,8 @@ app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
                 deleted: result.deletedCount,
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Bulk delete error:', error);
         res.status(500).json({
             success: false,
@@ -3464,49 +2966,32 @@ app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.post('/api/admin/users', async (req: Request, res: Response) => {
+app.post('/api/admin/users', async (req, res) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
         const consumersCollection = db.collection('consumers');
-        const {
-            name,
-            email,
-            mobile,
-            nidNo,
-            password,
-            role,
-            meterNo,
-            feederName,
-            address,
-            consumerType,
-        } = req.body;
-
+        const { name, email, mobile, nidNo, password, role, meterNo, feederName, address, consumerType, } = req.body;
         if (!name || !email || !password) {
             return res.status(400).json({
                 success: false,
                 message: 'Name, email, and password are required',
             });
         }
-
         const existingUser = await userCollection.findOne({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
                 { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
             ],
         });
-
         if (existingUser) {
             return res.status(400).json({
                 success: false,
                 message: 'User with this email or mobile already exists',
             });
         }
-
         const bcrypt = require('bcryptjs');
         const hashedPassword = await bcrypt.hash(password, 10);
-
         const newUser = {
             name,
             email,
@@ -3524,17 +3009,14 @@ app.post('/api/admin/users', async (req: Request, res: Response) => {
             createdAt: new Date(),
             updatedAt: new Date(),
         };
-
         const result = await userCollection.insertOne(newUser);
         const userId = result.insertedId.toString();
-
         const existingConsumer = await consumersCollection.findOne({
             $or: [
                 { email: { $regex: new RegExp(`^${email}$`, 'i') } },
                 { mobile: { $regex: new RegExp(`^${mobile}$`, 'i') } },
             ],
         });
-
         if (!existingConsumer) {
             const newConsumer = {
                 name,
@@ -3559,18 +3041,14 @@ app.post('/api/admin/users', async (req: Request, res: Response) => {
             };
             await consumersCollection.insertOne(newConsumer);
         }
-
-        const createdUser = await userCollection.findOne(
-            { _id: result.insertedId },
-            { projection: { password: 0 } }
-        );
-
+        const createdUser = await userCollection.findOne({ _id: result.insertedId }, { projection: { password: 0 } });
         res.status(201).json({
             success: true,
             message: 'User created successfully',
             data: createdUser,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('❌ Create user error:', error);
         res.status(500).json({
             success: false,
@@ -3578,54 +3056,49 @@ app.post('/api/admin/users', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 12. CONSUMER BILLS
 // =====================================================
-
-app.get('/api/consumer/bills/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/consumer/bills/:meterNo', async (req, res) => {
     try {
         await connectDB();
         const { meterNo } = req.params;
         const bills = await db.collection('bills').find({ meterNo }).toArray();
         res.json({ success: true, data: bills });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get bills error:', error);
         res.status(500).json({ success: false, message: 'Server error' });
     }
 });
-
 // =====================================================
 // 13. XEN ROUTES
 // =====================================================
-
-app.get('/api/xen/applications', async (req: Request, res: Response) => {
+app.get('/api/xen/applications', async (req, res) => {
     try {
         await connectDB();
         const applications = await db.collection('connection_applications').find({}).toArray();
         res.json({ success: true, data: applications });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get applications error:', error);
         res.status(500).json({ success: false, message: 'Server error' });
     }
 });
-
 // =====================================================
 // 14. TRANSACTION ROUTES
 // =====================================================
-
-app.get('/api/transactions/all', async (req: Request, res: Response) => {
+app.get('/api/transactions/all', async (req, res) => {
     try {
         await connectDB();
         const transactionsCollection = db.collection('transactions');
         const { type, status, page = 1, limit = 10 } = req.query;
-
-        const filter: any = {};
-        if (type) filter.type = type;
-        if (status) filter.status = status;
-
+        const filter = {};
+        if (type)
+            filter.type = type;
+        if (status)
+            filter.status = status;
         const skip = (Number(page) - 1) * Number(limit);
-
         const [transactions, total] = await Promise.all([
             transactionsCollection
                 .find(filter)
@@ -3635,7 +3108,6 @@ app.get('/api/transactions/all', async (req: Request, res: Response) => {
                 .toArray(),
             transactionsCollection.countDocuments(filter),
         ]);
-
         res.json({
             success: true,
             data: transactions,
@@ -3646,7 +3118,8 @@ app.get('/api/transactions/all', async (req: Request, res: Response) => {
                 totalPages: Math.ceil(total / Number(limit)),
             },
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get all transactions error:', error);
         res.status(500).json({
             success: false,
@@ -3654,13 +3127,11 @@ app.get('/api/transactions/all', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/transactions/:id', async (req: Request, res: Response) => {
+app.get('/api/transactions/:id', async (req, res) => {
     try {
         await connectDB();
         const transactionsCollection = db.collection('transactions');
         const { id } = req.params;
-
         const transaction = await transactionsCollection.findOne({ transactionId: id });
         if (!transaction) {
             return res.status(404).json({
@@ -3668,12 +3139,12 @@ app.get('/api/transactions/:id', async (req: Request, res: Response) => {
                 message: 'Transaction not found',
             });
         }
-
         res.json({
             success: true,
             data: transaction,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get transaction error:', error);
         res.status(500).json({
             success: false,
@@ -3681,12 +3152,10 @@ app.get('/api/transactions/:id', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 15. SUBSTATION ROUTES
 // =====================================================
-
-app.get('/api/substations', async (req: Request, res: Response) => {
+app.get('/api/substations', async (req, res) => {
     try {
         await connectDB();
         const substationsCollection = db.collection('substations');
@@ -3694,12 +3163,12 @@ app.get('/api/substations', async (req: Request, res: Response) => {
             .find({})
             .sort({ name: 1 })
             .toArray();
-
         res.json({
             success: true,
             data: substations,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get substations error:', error);
         res.status(500).json({
             success: false,
@@ -3707,32 +3176,30 @@ app.get('/api/substations', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/substations/:id', async (req: Request, res: Response) => {
+app.get('/api/substations/:id', async (req, res) => {
     try {
         await connectDB();
         const substationsCollection = db.collection('substations');
         const { id } = req.params;
-
         let substation;
         try {
-            substation = await substationsCollection.findOne({ _id: new ObjectId(id) });
-        } catch {
+            substation = await substationsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+        }
+        catch {
             substation = await substationsCollection.findOne({ id: id });
         }
-
         if (!substation) {
             return res.status(404).json({
                 success: false,
                 message: 'Substation not found',
             });
         }
-
         res.json({
             success: true,
             data: substation,
         });
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Get substation error:', error);
         res.status(500).json({
             success: false,
@@ -3740,41 +3207,26 @@ app.get('/api/substations/:id', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 16. PAYMENT ROUTES
 // =====================================================
-
-app.post('/api/create-payment-session', async (req: Request, res: Response) => {
+app.post('/api/create-payment-session', async (req, res) => {
     try {
         await connectDB();
-
-        const {
-            applicationId,
-            billId,
-            amount,
-            consumerId,
-            consumerName,
-            email,
-            description
-        } = req.body;
-
+        const { applicationId, billId, amount, consumerId, consumerName, email, description } = req.body;
         console.log('📦 Payment request received:', { applicationId, billId, amount, consumerId });
-
         if (!applicationId && !billId) {
             return res.status(400).json({
                 success: false,
                 message: 'Application ID or Bill ID is required',
             });
         }
-
         if (!amount) {
             return res.status(400).json({
                 success: false,
                 message: 'Amount is required',
             });
         }
-
         const stripeSecretKey = process.env.STRIPE_SECRET_KEY;
         if (!stripeSecretKey) {
             console.error('❌ STRIPE_SECRET_KEY not found in environment variables');
@@ -3783,26 +3235,23 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
                 message: 'Payment service not configured',
             });
         }
-
         const stripe = require('stripe')(stripeSecretKey);
-
         let paymentType = '';
         let paymentId = '';
         let productName = '';
-        let metadata: any = {};
-
+        let metadata = {};
         if (applicationId) {
             paymentType = 'application';
             paymentId = applicationId;
             productName = `New Connection Fee - ${applicationId}`;
             metadata = { applicationId, consumerId: consumerId || 'unknown' };
-        } else if (billId) {
+        }
+        else if (billId) {
             paymentType = 'bill';
             paymentId = billId;
             productName = `Electricity Bill - ${billId}`;
             metadata = { billId, consumerId: consumerId || 'unknown' };
         }
-
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             line_items: [
@@ -3828,9 +3277,7 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
             },
             customer_email: email || undefined,
         });
-
         console.log('✅ Stripe session created:', session.id);
-
         await db.collection('payment_sessions').insertOne({
             sessionId: session.id,
             applicationId: applicationId || null,
@@ -3840,13 +3287,12 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
             status: 'pending',
             createdAt: new Date(),
         });
-
         res.json({
             success: true,
             url: session.url,
         });
-
-    } catch (error: any) {
+    }
+    catch (error) {
         console.error('❌ Stripe payment error:', error);
         res.status(500).json({
             success: false,
@@ -3855,29 +3301,20 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
         });
     }
 });
-
-app.get('/api/payment-success', async (req: Request, res: Response) => {
+app.get('/api/payment-success', async (req, res) => {
     try {
         const { session_id, app_id, bill_id } = req.query;
-
         console.log('✅ Payment success callback:', { session_id, app_id, bill_id });
-
         const transactionsCollection = db.collection('transactions');
-
         if (app_id) {
             const applicationsCollection = db.collection('connection_applications');
-
-            await applicationsCollection.updateOne(
-                { applicationId: app_id },
-                {
-                    $set: {
-                        status: 'payment_done',
-                        paymentStatus: 'paid',
-                        updatedAt: new Date(),
-                    },
-                }
-            );
-
+            await applicationsCollection.updateOne({ applicationId: app_id }, {
+                $set: {
+                    status: 'payment_done',
+                    paymentStatus: 'paid',
+                    updatedAt: new Date(),
+                },
+            });
             const application = await applicationsCollection.findOne({ applicationId: app_id });
             if (application) {
                 const transaction = {
@@ -3898,26 +3335,19 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 await transactionsCollection.insertOne(transaction);
                 console.log('✅ Transaction created for connection fee:', app_id);
             }
-
             return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=success`);
         }
-
         if (bill_id) {
             const billsCollection = db.collection('bills');
-
-            await billsCollection.updateOne(
-                { billId: bill_id },
-                {
-                    $set: {
-                        status: 'paid',
-                        isPaid: true,
-                        paidAt: new Date(),
-                        paymentMethod: 'Stripe',
-                        updatedAt: new Date(),
-                    },
-                }
-            );
-
+            await billsCollection.updateOne({ billId: bill_id }, {
+                $set: {
+                    status: 'paid',
+                    isPaid: true,
+                    paidAt: new Date(),
+                    paymentMethod: 'Stripe',
+                    updatedAt: new Date(),
+                },
+            });
             const bill = await billsCollection.findOne({ billId: bill_id });
             if (bill) {
                 const transaction = {
@@ -3938,50 +3368,42 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 await transactionsCollection.insertOne(transaction);
                 console.log('✅ Transaction created for bill payment:', bill_id);
             }
-
             return res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=success`);
         }
-
         res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
-
-    } catch (error) {
+    }
+    catch (error) {
         console.error('Payment success error:', error);
         res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer?payment=failed`);
     }
 });
-
-app.get('/api/payment-cancel', async (req: Request, res: Response) => {
+app.get('/api/payment-cancel', async (req, res) => {
     const { app_id, bill_id } = req.query;
     console.log('❌ Payment cancelled:', { app_id, bill_id });
-
     if (app_id) {
         res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-connections?payment=cancelled`);
-    } else if (bill_id) {
+    }
+    else if (bill_id) {
         res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer/my-bills?payment=cancelled`);
-    } else {
+    }
+    else {
         res.redirect(`${process.env.BETTER_AUTH_URL || 'http://localhost:3000'}/dashboard/consumer`);
     }
 });
-
-app.post('/api/payment-verify', async (req: Request, res: Response) => {
+app.post('/api/payment-verify', async (req, res) => {
     try {
         await connectDB();
-
         const { sessionId, applicationId, billId } = req.body;
-
         console.log('🔍 Verifying payment:', { sessionId, applicationId, billId });
-
         if (!sessionId && !applicationId && !billId) {
             return res.status(400).json({
                 success: false,
                 message: 'Session ID, Application ID, or Bill ID is required',
             });
         }
-
         if (applicationId) {
             const applicationsCollection = db.collection('connection_applications');
             const application = await applicationsCollection.findOne({ applicationId });
-
             if (application && application.status === 'payment_done') {
                 return res.json({
                     success: true,
@@ -3989,25 +3411,19 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                     data: application,
                 });
             }
-
-            const result = await applicationsCollection.updateOne(
-                { applicationId },
-                {
-                    $set: {
-                        status: 'payment_done',
-                        paymentStatus: 'paid',
-                        updatedAt: new Date(),
-                    },
-                }
-            );
-
+            const result = await applicationsCollection.updateOne({ applicationId }, {
+                $set: {
+                    status: 'payment_done',
+                    paymentStatus: 'paid',
+                    updatedAt: new Date(),
+                },
+            });
             if (result.matchedCount === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Application not found',
                 });
             }
-
             const updated = await applicationsCollection.findOne({ applicationId });
             return res.json({
                 success: true,
@@ -4015,11 +3431,9 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                 data: updated,
             });
         }
-
         if (billId) {
             const billsCollection = db.collection('bills');
             const bill = await billsCollection.findOne({ billId });
-
             if (bill && bill.status === 'paid') {
                 return res.json({
                     success: true,
@@ -4027,27 +3441,21 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                     data: bill,
                 });
             }
-
-            const result = await billsCollection.updateOne(
-                { billId },
-                {
-                    $set: {
-                        status: 'paid',
-                        isPaid: true,
-                        paidAt: new Date(),
-                        paymentMethod: 'Stripe',
-                        updatedAt: new Date(),
-                    },
-                }
-            );
-
+            const result = await billsCollection.updateOne({ billId }, {
+                $set: {
+                    status: 'paid',
+                    isPaid: true,
+                    paidAt: new Date(),
+                    paymentMethod: 'Stripe',
+                    updatedAt: new Date(),
+                },
+            });
             if (result.matchedCount === 0) {
                 return res.status(404).json({
                     success: false,
                     message: 'Bill not found',
                 });
             }
-
             const updated = await billsCollection.findOne({ billId });
             return res.json({
                 success: true,
@@ -4055,24 +3463,19 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                 data: updated,
             });
         }
-
         if (sessionId) {
             const paymentSessionsCollection = db.collection('payment_sessions');
             const paymentSession = await paymentSessionsCollection.findOne({ sessionId });
-
             if (paymentSession) {
                 if (paymentSession.applicationId) {
                     const applicationsCollection = db.collection('connection_applications');
-                    await applicationsCollection.updateOne(
-                        { applicationId: paymentSession.applicationId },
-                        {
-                            $set: {
-                                status: 'payment_done',
-                                paymentStatus: 'paid',
-                                updatedAt: new Date(),
-                            },
-                        }
-                    );
+                    await applicationsCollection.updateOne({ applicationId: paymentSession.applicationId }, {
+                        $set: {
+                            status: 'payment_done',
+                            paymentStatus: 'paid',
+                            updatedAt: new Date(),
+                        },
+                    });
                     const updated = await applicationsCollection.findOne({
                         applicationId: paymentSession.applicationId
                     });
@@ -4081,20 +3484,18 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                         message: 'Payment verified successfully',
                         data: updated,
                     });
-                } else if (paymentSession.billId) {
+                }
+                else if (paymentSession.billId) {
                     const billsCollection = db.collection('bills');
-                    await billsCollection.updateOne(
-                        { billId: paymentSession.billId },
-                        {
-                            $set: {
-                                status: 'paid',
-                                isPaid: true,
-                                paidAt: new Date(),
-                                paymentMethod: 'Stripe',
-                                updatedAt: new Date(),
-                            },
-                        }
-                    );
+                    await billsCollection.updateOne({ billId: paymentSession.billId }, {
+                        $set: {
+                            status: 'paid',
+                            isPaid: true,
+                            paidAt: new Date(),
+                            paymentMethod: 'Stripe',
+                            updatedAt: new Date(),
+                        },
+                    });
                     const updated = await billsCollection.findOne({
                         billId: paymentSession.billId
                     });
@@ -4105,24 +3506,19 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
                     });
                 }
             }
-
-            await paymentSessionsCollection.updateOne(
-                { sessionId },
-                {
-                    $set: {
-                        status: 'completed',
-                        completedAt: new Date(),
-                    },
-                }
-            );
+            await paymentSessionsCollection.updateOne({ sessionId }, {
+                $set: {
+                    status: 'completed',
+                    completedAt: new Date(),
+                },
+            });
         }
-
         return res.status(404).json({
             success: false,
             message: 'Payment not found',
         });
-
-    } catch (error: any) {
+    }
+    catch (error) {
         console.error('❌ Payment verification error:', error);
         res.status(500).json({
             success: false,
@@ -4131,27 +3527,23 @@ app.post('/api/payment-verify', async (req: Request, res: Response) => {
         });
     }
 });
-
 // =====================================================
 // 17. 404 HANDLER
 // =====================================================
-app.use((req: Request, res: Response) => {
+app.use((req, res) => {
     res.status(404).json({ success: false, message: 'Route not found' });
 });
-
 // =====================================================
 // 18. ERROR HANDLER
 // =====================================================
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+app.use((err, req, res, next) => {
     console.error('❌ Error:', err);
     res.status(500).json({ success: false, message: 'Internal server error' });
 });
-
 // =====================================================
 // ✅ VERCEL EXPORT - This is required for Vercel deployment
 // =====================================================
-export default app;
-
+exports.default = app;
 // =====================================================
 // ✅ LOCAL DEVELOPMENT SERVER - Only runs in development
 // =====================================================
@@ -4162,7 +3554,6 @@ if (process.env.NODE_ENV !== 'production') {
             console.log('✅ Database ready');
             await initializeCollections();
             await initAuth();
-
             app.listen(PORT, () => {
                 console.log(`\n🚀 Server running at http://localhost:${PORT}`);
                 console.log(`📁 Database: ${DB_NAME}`);
@@ -4182,13 +3573,11 @@ if (process.env.NODE_ENV !== 'production') {
                 console.log(`  📌 Payment - Stripe integration`);
                 console.log(`\n✅ Server started successfully!\n`);
             });
-        } catch (error) {
+        }
+        catch (error) {
             console.error('❌ Failed to start server:', error);
             process.exit(1);
         }
     };
-
     startServer();
 }
-
-export { app, connectDB, getDB };
