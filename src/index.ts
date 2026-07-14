@@ -16,7 +16,7 @@ const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
 const BETTER_AUTH_URL = process.env.BETTER_AUTH_URL;
 
 // =====================================================
-// MONGODB CONNECTION
+// MONGODB CONNECTIONs
 // =====================================================
 let client: MongoClient;
 let db: Db;
