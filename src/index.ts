@@ -1,4 +1,4 @@
-// src/index.ts - COMPLETE BACKEND WITH SESSION FIX (FULLY FIXED)
+// src/index.ts - COMPLETE BACKEND WITH ALL ROUTES (Google Login Fixed)
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -7,6 +7,7 @@ import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from 'better-auth/adapters/mongodb';
 import { toNodeHandler } from 'better-auth/node';
 import Stripe from 'stripe';
+
 dotenv.config();
 
 const PORT = process.env.PORT || 5000;
@@ -196,24 +197,16 @@ const initializeCollections = async () => {
 const app: Application = express();
 
 // =====================================================
-// ✅ CORS CONFIGURATION
+// ✅ CORS CONFIGURATION - MUST ALLOW FRONTEND DOMAIN
 // =====================================================
 app.use(
     cors({
-        origin: function (origin, callback) {
-            if (!origin) return callback(null, true);
-            const allowedOrigins = [
-                'http://localhost:3000',
-                'http://localhost:3001',
-                'https://wzpdcl-client.vercel.app',
-                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
-            ];
-            if (allowedOrigins.indexOf(origin) !== -1) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        },
+        origin: [
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'https://wzpdcl-client.vercel.app',
+            'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app'
+        ],
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
@@ -245,7 +238,7 @@ app.get('/', (req: Request, res: Response) => {
 });
 
 // =====================================================
-// ✅ BETTER AUTH SETUP - COMPLETE FIXED VERSION
+// ✅ BETTER AUTH SETUP - FIXED FOR CROSS-DOMAIN & GOOGLE LOGIN
 // =====================================================
 let auth: any = null;
 let authHandler: any = null;
@@ -261,69 +254,72 @@ const initAuth = async () => {
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
 
-       // src/index.ts - Better Auth 부분 (শুধু এই অংশ)
-// src/index.ts - Better Auth Setup (initAuth function এর ভিতরে)
-
-auth = betterAuth({
-    secret: BETTER_AUTH_SECRET,
-    baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
-    database: mongodbAdapter(getDB()),
-    emailAndPassword: {
-        enabled: true,
-    },
-    socialProviders: {
-        google: {
-            clientId: process.env.GOOGLE_CLIENT_ID || '',
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-            scope: ['email', 'profile'],
-        },
-    },
-    user: {
-        additionalFields: {
-            mobile: { type: 'string', required: false },
-            nidNo: { type: 'string', required: false },
-            userType: { type: 'string', required: false },
-            feederName: { type: 'string', required: false },
-            meterNo: { type: 'string', required: false },
-            meters: { type: 'json', required: false },
-            claimedMeters: { type: 'json', required: false },
-            profileImage: { type: 'string', required: false },
-            role: { type: 'string', required: false },
-            isActive: { type: 'boolean', required: false },
-            address: { type: 'string', required: false },
-        },
-        // ✅ Hook to set default role on user creation
-        hooks: {
-            create: {
-                after: async (user: any) => {
-                    try {
-                        // ✅ If role is not set, set it to 'consumer'
-                        if (!user.role) {
-                            const db = getDB(); // Make sure getDB() is accessible
-                            await db.collection('user').updateOne(
-                                { _id: new ObjectId(user.id) },
-                                { $set: { role: 'consumer' } }
-                            );
-                            console.log(`✅ Default role 'consumer' set for user: ${user.id}`);
+        auth = betterAuth({
+            secret: BETTER_AUTH_SECRET,
+            baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
+            database: mongodbAdapter(getDB()),
+            emailAndPassword: {
+                enabled: true,
+            },
+            socialProviders: {
+                google: {
+                    clientId: process.env.GOOGLE_CLIENT_ID || '',
+                    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+                    scope: ['email', 'profile'],
+                },
+            },
+            user: {
+                additionalFields: {
+                    mobile: { type: 'string', required: false },
+                    nidNo: { type: 'string', required: false },
+                    userType: { type: 'string', required: false },
+                    feederName: { type: 'string', required: false },
+                    meterNo: { type: 'string', required: false },
+                    meters: { type: 'json', required: false },
+                    claimedMeters: { type: 'json', required: false },
+                    profileImage: { type: 'string', required: false },
+                    role: { type: 'string', required: false },
+                    isActive: { type: 'boolean', required: false },
+                    address: { type: 'string', required: false },
+                },
+                // ✅ Hook to set default role for social logins
+                hooks: {
+                    create: {
+                        after: async (user: any) => {
+                            try {
+                                if (!user.role) {
+                                    await db.collection('user').updateOne(
+                                        { _id: new ObjectId(user.id) },
+                                        { $set: { role: 'consumer' } }
+                                    );
+                                    console.log(`✅ Default role 'consumer' set for user: ${user.id}`);
+                                }
+                            } catch (error) {
+                                console.error('Error setting default role:', error);
+                            }
+                            return user;
                         }
-                    } catch (error) {
-                        console.error('Error setting default role:', error);
                     }
-                    return user;
                 }
-            }
-        }
-    },
-    trustedOrigins: [
-        'http://localhost:3000',
-        'https://wzpdcl-client.vercel.app',
-    ],
-    advanced: {
-        cookiePrefix: 'wzpdcl',
-        secureCookies: process.env.NODE_ENV === 'production',
-        sameSite: 'lax',
-    },
-});
+            },
+            trustedOrigins: [
+                'http://localhost:3000',
+                'http://localhost:3001',
+                'https://wzpdcl-client.vercel.app',
+                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app'
+            ],
+            advanced: {
+                cookiePrefix: 'wzpdcl',
+                // ✅ Cross-domain cookie settings
+                defaultCookieAttributes: {
+                    sameSite: 'none',
+                    secure: true,
+                },
+                // For older versions of Better Auth
+                sameSite: 'none',
+                secureCookies: process.env.NODE_ENV === 'production',
+            },
+        });
 
         authHandler = toNodeHandler(auth);
         console.log('✅ Better Auth initialized successfully');
@@ -3860,7 +3856,6 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
                 message: 'Payment service not configured',
             });
         }
-
 
         const stripe = new Stripe(stripeSecretKey);
 
