@@ -191,12 +191,21 @@ app.use(express.urlencoded({ extended: true }));
 let auth: any = null;
 let authHandler: any = null;
 
+// Instead of:
+// import { betterAuth } from 'better-auth';
+
+// Use dynamic import:
 const initAuth = async () => {
     if (authHandler) return authHandler;
 
     try {
         await connectDB();
         console.log('📦 Initializing Better Auth...');
+
+        // Dynamic import for ESM module
+        const { betterAuth } = await import('better-auth');
+        const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
+        const { toNodeHandler } = await import('better-auth/node');
 
         auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
@@ -216,19 +225,13 @@ const initAuth = async () => {
                 additionalFields: {
                     mobile: { type: 'string', required: false },
                     nidNo: { type: 'string', required: false },
-                    userType: {
-                        type: 'string',
-                        required: false
-                    },
+                    userType: { type: 'string', required: false },
                     feederName: { type: 'string', required: false },
                     meterNo: { type: 'string', required: false },
                     meters: { type: 'json', required: false },
                     claimedMeters: { type: 'json', required: false },
                     profileImage: { type: 'string', required: false },
-                    role: {
-                        type: 'string',
-                        required: false
-                    },
+                    role: { type: 'string', required: false },
                     isActive: { type: 'boolean', required: false },
                     address: { type: 'string', required: false },
                 },
@@ -252,7 +255,6 @@ const initAuth = async () => {
         };
     }
 };
-
 // =====================================================
 // BETTER AUTH SESSION MIDDLEWARE
 // =====================================================

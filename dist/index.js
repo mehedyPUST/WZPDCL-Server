@@ -1,18 +1,9 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getDB = exports.connectDB = exports.app = void 0;
 // src/index.ts - Complete Backend with all routes (FULLY FIXED FOR VERCEL)
-const express_1 = __importDefault(require("express"));
-const cors_1 = __importDefault(require("cors"));
-const dotenv_1 = __importDefault(require("dotenv"));
-const mongodb_1 = require("mongodb");
-const better_auth_1 = require("better-auth");
-const mongodb_2 = require("better-auth/adapters/mongodb");
-const node_1 = require("better-auth/node");
-dotenv_1.default.config();
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import { MongoClient, ObjectId } from 'mongodb';
+dotenv.config();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.DB_NAME;
@@ -23,7 +14,7 @@ const BETTER_AUTH_URL = process.env.BETTER_AUTH_URL;
 // =====================================================
 const createIdQuery = (id) => {
     try {
-        return { _id: new mongodb_1.ObjectId(id) };
+        return { _id: new ObjectId(id) };
     }
     catch {
         return { _id: id };
@@ -43,7 +34,7 @@ const connectDB = async () => {
             throw new Error('MONGODB_URI is not defined in environment variables');
         }
         if (!client) {
-            client = new mongodb_1.MongoClient(MONGODB_URI, {
+            client = new MongoClient(MONGODB_URI, {
                 maxPoolSize: 10,
                 minPoolSize: 1,
                 socketTimeoutMS: 45000,
@@ -65,14 +56,12 @@ const connectDB = async () => {
         throw error;
     }
 };
-exports.connectDB = connectDB;
 const getDB = () => {
     if (!db) {
         throw new Error('Database not initialized. Call connectDB() first.');
     }
     return db;
 };
-exports.getDB = getDB;
 // =====================================================
 // HELPER FUNCTIONS
 // =====================================================
@@ -150,31 +139,37 @@ const initializeCollections = async () => {
 // =====================================================
 // EXPRESS APP
 // =====================================================
-const app = (0, express_1.default)();
-exports.app = app;
-app.use((0, cors_1.default)({
+const app = express();
+app.use(cors({
     origin: ['http://localhost:3000', 'http://localhost:3001', true],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
 }));
-app.use(express_1.default.json());
-app.use(express_1.default.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 // =====================================================
 // BETTER AUTH SETUP
 // =====================================================
 let auth = null;
 let authHandler = null;
+// Instead of:
+// import { betterAuth } from 'better-auth';
+// Use dynamic import:
 const initAuth = async () => {
     if (authHandler)
         return authHandler;
     try {
         await connectDB();
         console.log('📦 Initializing Better Auth...');
-        auth = (0, better_auth_1.betterAuth)({
+        // Dynamic import for ESM module
+        const { betterAuth } = await import('better-auth');
+        const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
+        const { toNodeHandler } = await import('better-auth/node');
+        auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL,
-            database: (0, mongodb_2.mongodbAdapter)(getDB()),
+            database: mongodbAdapter(getDB()),
             emailAndPassword: {
                 enabled: true,
             },
@@ -189,19 +184,13 @@ const initAuth = async () => {
                 additionalFields: {
                     mobile: { type: 'string', required: false },
                     nidNo: { type: 'string', required: false },
-                    userType: {
-                        type: 'string',
-                        required: false
-                    },
+                    userType: { type: 'string', required: false },
                     feederName: { type: 'string', required: false },
                     meterNo: { type: 'string', required: false },
                     meters: { type: 'json', required: false },
                     claimedMeters: { type: 'json', required: false },
                     profileImage: { type: 'string', required: false },
-                    role: {
-                        type: 'string',
-                        required: false
-                    },
+                    role: { type: 'string', required: false },
                     isActive: { type: 'boolean', required: false },
                     address: { type: 'string', required: false },
                 },
@@ -211,7 +200,7 @@ const initAuth = async () => {
                 cookiePrefix: 'wzpdcl',
             },
         });
-        authHandler = (0, node_1.toNodeHandler)(auth);
+        authHandler = toNodeHandler(auth);
         console.log('✅ Better Auth initialized successfully');
         return authHandler;
     }
@@ -680,7 +669,7 @@ app.get('/api/complaints/:id', async (req, res) => {
         }
         else {
             try {
-                complaint = await complaintsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+                complaint = await complaintsCollection.findOne({ _id: new ObjectId(id) });
             }
             catch {
                 complaint = await complaintsCollection.findOne({ complaintId: id });
@@ -915,7 +904,7 @@ app.get('/api/connection-applications/:id', async (req, res) => {
         }
         else {
             try {
-                application = await applicationsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+                application = await applicationsCollection.findOne({ _id: new ObjectId(id) });
             }
             catch {
                 application = await applicationsCollection.findOne({ applicationId: id });
@@ -2196,7 +2185,7 @@ app.patch('/api/billing/bills/:billId/pay', async (req, res) => {
 // GENERATE BILL
 // =====================================================
 // =====================================================
-// GENERATE BILL (Updated - Meter Based)
+// GENERATE BILL (Updated - Meter Based)  d 
 // =====================================================
 app.post('/api/billing/generate-bill', async (req, res) => {
     try {
@@ -2876,7 +2865,7 @@ app.patch('/api/admin/users/bulk', async (req, res) => {
         }
         const objectIds = userIds.map((id) => {
             try {
-                return new mongodb_1.ObjectId(id);
+                return new ObjectId(id);
             }
             catch {
                 return id;
@@ -2919,7 +2908,7 @@ app.delete('/api/admin/users/bulk', async (req, res) => {
         }
         const objectIds = userIds.map((id) => {
             try {
-                return new mongodb_1.ObjectId(id);
+                return new ObjectId(id);
             }
             catch {
                 return id;
@@ -3183,7 +3172,7 @@ app.get('/api/substations/:id', async (req, res) => {
         const { id } = req.params;
         let substation;
         try {
-            substation = await substationsCollection.findOne({ _id: new mongodb_1.ObjectId(id) });
+            substation = await substationsCollection.findOne({ _id: new ObjectId(id) });
         }
         catch {
             substation = await substationsCollection.findOne({ id: id });
@@ -3543,7 +3532,7 @@ app.use((err, req, res, next) => {
 // =====================================================
 // ✅ VERCEL EXPORT - This is required for Vercel deployment
 // =====================================================
-exports.default = app;
+export default app;
 // =====================================================
 // ✅ LOCAL DEVELOPMENT SERVER - Only runs in development
 // =====================================================
@@ -3581,3 +3570,4 @@ if (process.env.NODE_ENV !== 'production') {
     };
     startServer();
 }
+export { app, connectDB, getDB };

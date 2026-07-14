@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "WZPDCL Power Distribution Backend Server",
   "main": "dist/index.js",
+  "type": "module",
   "scripts": {
     "dev": "nodemon",
     "start": "node dist/index.js",
@@ -18,7 +19,6 @@
   ],
   "author": "WZPDCL",
   "license": "ISC",
-  "type": "commonjs",
   "engines": {
     "node": ">=18.0.0"
   },
