@@ -262,6 +262,8 @@ const initAuth = async () => {
         const { toNodeHandler } = await import('better-auth/node');
 
        // src/index.ts - Better Auth 부분 (শুধু এই অংশ)
+// src/index.ts - Better Auth Setup (initAuth function এর ভিতরে)
+
 auth = betterAuth({
     secret: BETTER_AUTH_SECRET,
     baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
@@ -290,6 +292,27 @@ auth = betterAuth({
             isActive: { type: 'boolean', required: false },
             address: { type: 'string', required: false },
         },
+        // ✅ Hook to set default role on user creation
+        hooks: {
+            create: {
+                after: async (user: any) => {
+                    try {
+                        // ✅ If role is not set, set it to 'consumer'
+                        if (!user.role) {
+                            const db = getDB(); // Make sure getDB() is accessible
+                            await db.collection('user').updateOne(
+                                { _id: new ObjectId(user.id) },
+                                { $set: { role: 'consumer' } }
+                            );
+                            console.log(`✅ Default role 'consumer' set for user: ${user.id}`);
+                        }
+                    } catch (error) {
+                        console.error('Error setting default role:', error);
+                    }
+                    return user;
+                }
+            }
+        }
     },
     trustedOrigins: [
         'http://localhost:3000',
