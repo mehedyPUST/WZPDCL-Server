@@ -198,7 +198,7 @@ const app: Application = express();
 // ✅ CORS - Updated for production with environment variables
 const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',')
-    : [];
+    : ['https://wzpdcl-client.vercel.app', 'http://localhost:3000'];
 
 app.use(
     cors({
@@ -210,7 +210,7 @@ app.use(
                 callback(new Error('Not allowed by CORS'));
             }
         },
-        credentials: true,
+        credentials: true, // ✅ Must be true
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
         exposedHeaders: ['Set-Cookie'],
