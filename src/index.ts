@@ -339,6 +339,7 @@ const initAuth = async () => {
                 },
                 sameSite: 'none',
                 secureCookies: process.env.NODE_ENV === 'production',
+                skipStateCookieCheck: true,
             },
         });
 
