@@ -316,9 +316,7 @@ auth = betterAuth({
     },
     trustedOrigins: [
         'http://localhost:3000',
-        'http://localhost:3001',
         'https://wzpdcl-client.vercel.app',
-        'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
     ],
     advanced: {
         cookiePrefix: 'wzpdcl',
