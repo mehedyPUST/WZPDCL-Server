@@ -261,9 +261,10 @@ const initAuth = async () => {
             ? process.env.TRUSTED_ORIGINS.split(',')
             : [];
 
+        // src/index.ts - Better Auth Configuration
         auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
-            baseURL: BETTER_AUTH_URL || process.env.VERCEL_URL || 'https://wzpdcl-server.vercel.app',
+            baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
             database: mongodbAdapter(getDB()),
             emailAndPassword: {
                 enabled: true,
@@ -290,7 +291,12 @@ const initAuth = async () => {
                     address: { type: 'string', required: false },
                 },
             },
-            trustedOrigins: trustedOrigins,
+            trustedOrigins: [
+                'http://localhost:3000',
+                'http://localhost:3001',
+                'https://wzpdcl-client.vercel.app',
+                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
+            ],
             advanced: {
                 cookiePrefix: 'wzpdcl',
                 secureCookies: process.env.NODE_ENV === 'production',
