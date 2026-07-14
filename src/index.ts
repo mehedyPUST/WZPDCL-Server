@@ -261,47 +261,48 @@ const initAuth = async () => {
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
 
-        auth = betterAuth({
-            secret: BETTER_AUTH_SECRET,
-            baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
-            database: mongodbAdapter(getDB()),
-            emailAndPassword: {
-                enabled: true,
-            },
-            socialProviders: {
-                google: {
-                    clientId: process.env.GOOGLE_CLIENT_ID || '',
-                    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
-                    scope: ['email', 'profile'],
-                },
-            },
-            user: {
-                additionalFields: {
-                    mobile: { type: 'string', required: false },
-                    nidNo: { type: 'string', required: false },
-                    userType: { type: 'string', required: false },
-                    feederName: { type: 'string', required: false },
-                    meterNo: { type: 'string', required: false },
-                    meters: { type: 'json', required: false },
-                    claimedMeters: { type: 'json', required: false },
-                    profileImage: { type: 'string', required: false },
-                    role: { type: 'string', required: false },
-                    isActive: { type: 'boolean', required: false },
-                    address: { type: 'string', required: false },
-                },
-            },
-            trustedOrigins: [
-                'http://localhost:3000',
-                'http://localhost:3001',
-                'https://wzpdcl-client.vercel.app',
-                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
-            ],
-            advanced: {
-                cookiePrefix: 'wzpdcl',
-                secureCookies: process.env.NODE_ENV === 'production',
-                sameSite: 'lax',
-            },
-        });
+       // src/index.ts - Better Auth 부분 (শুধু এই অংশ)
+auth = betterAuth({
+    secret: BETTER_AUTH_SECRET,
+    baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
+    database: mongodbAdapter(getDB()),
+    emailAndPassword: {
+        enabled: true,
+    },
+    socialProviders: {
+        google: {
+            clientId: process.env.GOOGLE_CLIENT_ID || '',
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+            scope: ['email', 'profile'],
+        },
+    },
+    user: {
+        additionalFields: {
+            mobile: { type: 'string', required: false },
+            nidNo: { type: 'string', required: false },
+            userType: { type: 'string', required: false },
+            feederName: { type: 'string', required: false },
+            meterNo: { type: 'string', required: false },
+            meters: { type: 'json', required: false },
+            claimedMeters: { type: 'json', required: false },
+            profileImage: { type: 'string', required: false },
+            role: { type: 'string', required: false },
+            isActive: { type: 'boolean', required: false },
+            address: { type: 'string', required: false },
+        },
+    },
+    trustedOrigins: [
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'https://wzpdcl-client.vercel.app',
+        'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
+    ],
+    advanced: {
+        cookiePrefix: 'wzpdcl',
+        secureCookies: process.env.NODE_ENV === 'production',
+        sameSite: 'lax',
+    },
+});
 
         authHandler = toNodeHandler(auth);
         console.log('✅ Better Auth initialized successfully');
