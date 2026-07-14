@@ -1,7 +1,6 @@
 // api/index.js
 import app from '../dist/index.js';
 
-// ✅ Global error handler for Vercel
 export default async function handler(req, res) {
     console.log(`📝 ${req.method} ${req.url}`);
     console.log('🔍 Environment check:', {
@@ -17,8 +16,7 @@ export default async function handler(req, res) {
         res.status(500).json({
             success: false,
             message: 'Internal Server Error',
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            error: error.message
         });
     }
 }

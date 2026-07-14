@@ -1,8 +1,8 @@
 node_modules
-src
 .git
 README.md
 .env
 .env.local
-*.ts
-!api/*.js
+*.log
+.DS_Store
+# ✅ Remove "src" from ignore list if it's there
