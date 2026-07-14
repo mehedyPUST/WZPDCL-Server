@@ -2552,7 +2552,7 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
 // GENERATE BILL
 // =====================================================
 // =====================================================
-// GENERATE BILL (Updated - Meter Based)
+// GENERATE BILL (Updated - Meter Based)  d 
 // =====================================================
 app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
     try {
