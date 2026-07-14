@@ -205,19 +205,32 @@ const allowedOrigins = [
     'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
 ];
 
+// src/index.ts - CORS Configuration (Replace this section)
 app.use(
     cors({
-        origin: [
-            'http://localhost:3000',
-            'https://wzpdcl-client.vercel.app',
-        ],
+        origin: function (origin, callback) {
+            // Allow requests with no origin (like mobile apps or curl requests)
+            if (!origin) return callback(null, true);
+
+            // Production origins
+            const allowedOrigins = [
+                'http://localhost:3000',
+                'http://localhost:3000',
+                'https://wzpdcl-client.vercel.app',
+            ];
+
+            if (allowedOrigins.indexOf(origin) !== -1) {
+                callback(null, true);
+            } else {
+                callback(new Error('Not allowed by CORS'));
+            }
+        },
         credentials: true, // ✅ MUST BE TRUE
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
         exposedHeaders: ['Set-Cookie'],
     })
 );
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
