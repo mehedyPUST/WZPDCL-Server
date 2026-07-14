@@ -258,6 +258,9 @@ app.get('/', (req: Request, res: Response) => {
 // =====================================================
 // ✅ CRITICAL FIX 2: BETTER AUTH CONFIGURATION
 // =====================================================
+// =====================================================
+// BETTER AUTH SETUP - Complete with all options
+// =====================================================
 let auth: any = null;
 let authHandler: any = null;
 
@@ -272,16 +275,18 @@ const initAuth = async () => {
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
 
-        // =====================================================
-        // ✅ CRITICAL FIX 3: Better Auth with proper cookie settings
-        // =====================================================
         auth = betterAuth({
+            // ✅ Basic Configuration
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
             database: mongodbAdapter(getDB()),
+
+            // ✅ Email & Password Authentication
             emailAndPassword: {
                 enabled: true,
             },
+
+            // ✅ Social Providers
             socialProviders: {
                 google: {
                     clientId: process.env.GOOGLE_CLIENT_ID || '',
@@ -289,6 +294,8 @@ const initAuth = async () => {
                     scope: ['email', 'profile'],
                 },
             },
+
+            // ✅ User Custom Fields
             user: {
                 additionalFields: {
                     mobile: { type: 'string', required: false },
@@ -304,16 +311,32 @@ const initAuth = async () => {
                     address: { type: 'string', required: false },
                 },
             },
+
+            // ✅ Trusted Origins (for CSRF protection)
             trustedOrigins: [
                 'http://localhost:3000',
                 'http://localhost:3001',
                 'https://wzpdcl-client.vercel.app',
                 'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
             ],
+
+            // ✅ Advanced Settings - CRITICAL for Production
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                secureCookies: process.env.NODE_ENV === 'production', // ✅ MUST BE TRUE IN PRODUCTION
-                sameSite: 'lax', // ✅ MUST BE LAX
+                secureCookies: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
+            },
+
+            // ✅ Database Configuration
+            databaseHooks: {
+                createUser: async (user: any) => {
+                    console.log('🆕 New user created:', user.id);
+                    return user;
+                },
+                updateUser: async (user: any) => {
+                    console.log('📝 User updated:', user.id);
+                    return user;
+                },
             },
         });
 
