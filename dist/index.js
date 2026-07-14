@@ -1,8 +1,9 @@
-// src/index.ts - Complete Backend with all routes (FULLY FIXED FOR VERCEL)
+// src/index.ts - COMPLETE BACKEND WITH SESSION FIX
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { MongoClient, ObjectId } from 'mongodb';
+import Stripe from 'stripe';
 dotenv.config();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI;
@@ -157,24 +158,30 @@ const initializeCollections = async () => {
 // EXPRESS APP
 // =====================================================
 const app = express();
-// ✅ CORS - Updated for production with environment variables
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS.split(',')
-    : ['https://wzpdcl-client.vercel.app', 'http://localhost:3000'];
+// =====================================================
+// ✅ CRITICAL FIX 1: CORS CONFIGURATION
+// =====================================================
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://wzpdcl-client.vercel.app',
+    'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
+];
 app.use(cors({
     origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin)
             return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV !== 'production') {
+        if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         }
         else {
             callback(new Error('Not allowed by CORS'));
         }
     },
-    credentials: true, // ✅ Must be true
+    credentials: true, // ✅ MUST BE TRUE
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
     exposedHeaders: ['Set-Cookie'],
 }));
 app.use(express.json());
@@ -200,7 +207,7 @@ app.get('/', (req, res) => {
     });
 });
 // =====================================================
-// BETTER AUTH SETUP - Using dynamic import for ESM
+// ✅ CRITICAL FIX 2: BETTER AUTH CONFIGURATION
 // =====================================================
 let auth = null;
 let authHandler = null;
@@ -213,10 +220,9 @@ const initAuth = async () => {
         const { betterAuth } = await import('better-auth');
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
-        const trustedOrigins = process.env.TRUSTED_ORIGINS
-            ? process.env.TRUSTED_ORIGINS.split(',')
-            : [];
-        // src/index.ts - Better Auth Configuration
+        // =====================================================
+        // ✅ CRITICAL FIX 3: Better Auth with proper cookie settings
+        // =====================================================
         auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
@@ -254,8 +260,8 @@ const initAuth = async () => {
             ],
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                secureCookies: process.env.NODE_ENV === 'production',
-                sameSite: 'lax',
+                secureCookies: process.env.NODE_ENV === 'production', // ✅ MUST BE TRUE IN PRODUCTION
+                sameSite: 'lax', // ✅ MUST BE LAX
             },
         });
         authHandler = toNodeHandler(auth);
@@ -3272,7 +3278,7 @@ app.post('/api/create-payment-session', async (req, res) => {
                 message: 'Payment service not configured',
             });
         }
-        const stripe = require('stripe')(stripeSecretKey);
+        const stripe = new Stripe(stripeSecretKey);
         let paymentType = '';
         let paymentId = '';
         let productName = '';

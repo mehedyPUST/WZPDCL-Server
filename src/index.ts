@@ -6,7 +6,7 @@ import { MongoClient, Db, ObjectId } from 'mongodb';
 import { betterAuth } from 'better-auth';
 import { mongodbAdapter } from 'better-auth/adapters/mongodb';
 import { toNodeHandler } from 'better-auth/node';
-
+import Stripe from 'stripe';
 dotenv.config();
 
 const PORT = process.env.PORT || 5000;
@@ -207,19 +207,13 @@ const allowedOrigins = [
 
 app.use(
     cors({
-        origin: function (origin, callback) {
-            // Allow requests with no origin (like mobile apps or curl requests)
-            if (!origin) return callback(null, true);
-
-            if (allowedOrigins.indexOf(origin) !== -1) {
-                callback(null, true);
-            } else {
-                callback(new Error('Not allowed by CORS'));
-            }
-        },
+        origin: [
+            'http://localhost:3000',
+            'https://wzpdcl-client.vercel.app',
+        ],
         credentials: true, // ✅ MUST BE TRUE
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-        allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
+        allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
         exposedHeaders: ['Set-Cookie'],
     })
 );
@@ -3846,7 +3840,8 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
             });
         }
 
-        const stripe = require('stripe')(stripeSecretKey);
+
+        const stripe = new Stripe(stripeSecretKey);
 
         let paymentType = '';
         let paymentId = '';
