@@ -1,4 +1,4 @@
-// src/index.ts - COMPLETE BACKEND WITH SESSION FIX
+// src/index.ts - COMPLETE BACKEND WITH SESSION FIX (FULLY FIXED)
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -159,19 +159,18 @@ const initializeCollections = async () => {
 // =====================================================
 const app = express();
 // =====================================================
-// ✅ CRITICAL FIX 1: CORS CONFIGURATION
+// ✅ CORS CONFIGURATION
 // =====================================================
-const allowedOrigins = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'https://wzpdcl-client.vercel.app',
-    'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
-];
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin)
             return callback(null, true);
+        const allowedOrigins = [
+            'http://localhost:3000',
+            'http://localhost:3001',
+            'https://wzpdcl-client.vercel.app',
+            'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
+        ];
         if (allowedOrigins.indexOf(origin) !== -1) {
             callback(null, true);
         }
@@ -179,9 +178,9 @@ app.use(cors({
             callback(new Error('Not allowed by CORS'));
         }
     },
-    credentials: true, // ✅ MUST BE TRUE
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie', 'Set-Cookie'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
     exposedHeaders: ['Set-Cookie'],
 }));
 app.use(express.json());
@@ -207,7 +206,7 @@ app.get('/', (req, res) => {
     });
 });
 // =====================================================
-// ✅ CRITICAL FIX 2: BETTER AUTH CONFIGURATION
+// ✅ BETTER AUTH SETUP - COMPLETE FIXED VERSION
 // =====================================================
 let auth = null;
 let authHandler = null;
@@ -220,9 +219,6 @@ const initAuth = async () => {
         const { betterAuth } = await import('better-auth');
         const { mongodbAdapter } = await import('better-auth/adapters/mongodb');
         const { toNodeHandler } = await import('better-auth/node');
-        // =====================================================
-        // ✅ CRITICAL FIX 3: Better Auth with proper cookie settings
-        // =====================================================
         auth = betterAuth({
             secret: BETTER_AUTH_SECRET,
             baseURL: BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app',
@@ -260,8 +256,8 @@ const initAuth = async () => {
             ],
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                secureCookies: process.env.NODE_ENV === 'production', // ✅ MUST BE TRUE IN PRODUCTION
-                sameSite: 'lax', // ✅ MUST BE LAX
+                secureCookies: process.env.NODE_ENV === 'production',
+                sameSite: 'lax',
             },
         });
         authHandler = toNodeHandler(auth);

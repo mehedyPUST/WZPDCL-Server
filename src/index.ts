@@ -298,7 +298,7 @@ const initAuth = async () => {
             ],
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                useSecureCookies: process.env.NODE_ENV === 'production', // ✅ FIXED
+                secureCookies: process.env.NODE_ENV === 'production',
                 sameSite: 'lax',
             },
         });
