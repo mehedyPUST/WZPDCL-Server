@@ -1,4 +1,4 @@
-// src/index.ts - COMPLETE BACKEND WITH ALL ROUTES (Google Login Fixed)
+// src/index.ts - COMPLETE BACKEND WITH ALL ROUTES + FIXES
 import express, { Application, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
@@ -15,6 +15,7 @@ const MONGODB_URI = process.env.MONGODB_URI;
 const DB_NAME = process.env.DB_NAME;
 const BETTER_AUTH_SECRET = process.env.BETTER_AUTH_SECRET;
 const BETTER_AUTH_URL = process.env.BETTER_AUTH_URL;
+const CLIENT_URL = process.env.CLIENT_URL || 'https://wzpdcl-client.vercel.app'; // <-- for payment redirects
 
 // =====================================================
 // HELPER FUNCTION FOR OBJECT ID
@@ -154,7 +155,7 @@ const createTransaction = async (
 };
 
 // =====================================================
-// INITIALIZE COLLECTIONS
+// INITIALIZE COLLECTIONS & INDEXES
 // =====================================================
 
 const initializeCollections = async () => {
@@ -185,6 +186,32 @@ const initializeCollections = async () => {
             }
         }
 
+        // --- CREATE INDEXES FOR PERFORMANCE ---
+        try {
+            await db.collection('meters').createIndex({ meterNo: 1 }, { unique: true });
+            await db.collection('meters').createIndex({ status: 1 });
+            await db.collection('complaints').createIndex({ complaintId: 1 }, { unique: true });
+            await db.collection('complaints').createIndex({ status: 1 });
+            await db.collection('complaints').createIndex({ consumerId: 1 });
+            await db.collection('connection_applications').createIndex({ applicationId: 1 }, { unique: true });
+            await db.collection('connection_applications').createIndex({ status: 1 });
+            await db.collection('connection_applications').createIndex({ consumerId: 1 });
+            await db.collection('bills').createIndex({ billId: 1 }, { unique: true });
+            await db.collection('bills').createIndex({ meterNo: 1 });
+            await db.collection('bills').createIndex({ status: 1 });
+            await db.collection('bills').createIndex({ billingMonth: 1 });
+            await db.collection('consumers').createIndex({ email: 1 }, { unique: true, sparse: true });
+            await db.collection('consumers').createIndex({ mobile: 1 }, { unique: true, sparse: true });
+            await db.collection('consumers').createIndex({ nidNo: 1 }, { unique: true, sparse: true });
+            await db.collection('user').createIndex({ email: 1 }, { unique: true });
+            await db.collection('user').createIndex({ mobile: 1 }, { unique: true, sparse: true });
+            await db.collection('transactions').createIndex({ referenceId: 1 });
+            await db.collection('transactions').createIndex({ status: 1 });
+            console.log('✅ All indexes created');
+        } catch (indexError) {
+            console.warn('⚠️ Some indexes may already exist:', indexError);
+        }
+
         console.log('✅ All collections initialized');
     } catch (error) {
         console.error('Error initializing collections:', error);
@@ -199,14 +226,16 @@ const app: Application = express();
 // =====================================================
 // ✅ CORS CONFIGURATION - MUST ALLOW FRONTEND DOMAIN
 // =====================================================
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'https://wzpdcl-client.vercel.app',
+    'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app',
+    CLIENT_URL, // dynamic from env
+];
 app.use(
     cors({
-        origin: [
-            'http://localhost:3000',
-            'http://localhost:3001',
-            'https://wzpdcl-client.vercel.app',
-            'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app'
-        ],
+        origin: allowedOrigins,
         credentials: true,
         methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
         allowedHeaders: ['Content-Type', 'Authorization', 'Cookie', 'Set-Cookie'],
@@ -282,7 +311,6 @@ const initAuth = async () => {
                     isActive: { type: 'boolean', required: false },
                     address: { type: 'string', required: false },
                 },
-                // ✅ Hook to set default role for social logins
                 hooks: {
                     create: {
                         after: async (user: any) => {
@@ -302,20 +330,13 @@ const initAuth = async () => {
                     }
                 }
             },
-            trustedOrigins: [
-                'http://localhost:3000',
-                'http://localhost:3001',
-                'https://wzpdcl-client.vercel.app',
-                'https://wzpdcl-client-git-main-mehedypusts-projects.vercel.app'
-            ],
+            trustedOrigins: allowedOrigins,
             advanced: {
                 cookiePrefix: 'wzpdcl',
-                // ✅ Cross-domain cookie settings
                 defaultCookieAttributes: {
                     sameSite: 'none',
                     secure: true,
                 },
-                // For older versions of Better Auth
                 sameSite: 'none',
                 secureCookies: process.env.NODE_ENV === 'production',
             },
@@ -339,7 +360,13 @@ const initAuth = async () => {
 // BETTER AUTH SESSION MIDDLEWARE
 // =====================================================
 
-const protect = async (req: Request, res: Response, next: NextFunction) => {
+// Extend Express Request type
+interface AuthRequest extends Request {
+    user?: any;
+    session?: any;
+}
+
+const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
     try {
         const session = await auth.api.getSession({
             headers: req.headers,
@@ -352,9 +379,7 @@ const protect = async (req: Request, res: Response, next: NextFunction) => {
             });
         }
 
-        // @ts-ignore
         req.user = session.user;
-        // @ts-ignore
         req.session = session;
         next();
     } catch (error) {
@@ -367,8 +392,7 @@ const protect = async (req: Request, res: Response, next: NextFunction) => {
 };
 
 const authorize = (...roles: string[]) => {
-    return (req: Request, res: Response, next: NextFunction) => {
-        // @ts-ignore
+    return (req: AuthRequest, res: Response, next: NextFunction) => {
         const userRole = req.user?.role;
 
         if (!userRole || !roles.includes(userRole)) {
@@ -552,62 +576,12 @@ app.post('/api/auth/sign-up/email', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 4. CHANGE PASSWORD
+// 4. CHANGE PASSWORD (using Better Auth API)
 // =====================================================
 
-app.post('/api/auth/change-password', async (req: Request, res: Response) => {
+app.post('/api/auth/change-password', protect, async (req: AuthRequest, res: Response) => {
     try {
-        await connectDB();
-        const userCollection = db.collection('user');
         const { currentPassword, newPassword } = req.body;
-
-        console.log('📝 Change password request received');
-
-        let session;
-        try {
-            session = await auth.api.getSession({
-                headers: req.headers,
-            });
-        } catch (sessionError) {
-            console.error('❌ Session error:', sessionError);
-        }
-
-        if (!session || !session.user) {
-            const cookieHeader = req.headers.cookie;
-            if (cookieHeader) {
-                const cookies = cookieHeader.split(';').reduce((acc: any, cookie) => {
-                    const [key, value] = cookie.trim().split('=');
-                    acc[key] = value;
-                    return acc;
-                }, {});
-
-                const sessionToken = cookies['better-auth.session'];
-                if (sessionToken) {
-                    try {
-                        const parts = sessionToken.split('.');
-                        if (parts.length === 3) {
-                            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-                            if (payload.user && payload.user.id) {
-                                session = { user: payload.user };
-                            }
-                        }
-                    } catch (decodeError) {
-                        console.error('❌ Decode error:', decodeError);
-                    }
-                }
-            }
-        }
-
-        if (!session || !session.user) {
-            console.log('❌ No session found');
-            return res.status(401).json({
-                success: false,
-                message: 'Unauthorized. Please login again.',
-            });
-        }
-
-        const userId = session.user.id;
-        console.log(`👤 User ID: ${userId}`);
 
         if (!currentPassword || !newPassword) {
             return res.status(400).json({
@@ -623,58 +597,30 @@ app.post('/api/auth/change-password', async (req: Request, res: Response) => {
             });
         }
 
-        const query = createIdQuery(userId);
-
-        const user = await userCollection.findOne(query);
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found',
-            });
-        }
-
-        console.log('🔐 Verifying current password...');
-
-        const bcrypt = require('bcryptjs');
-        const isValid = await bcrypt.compare(currentPassword, user.password);
-        if (!isValid) {
-            return res.status(400).json({
-                success: false,
-                message: 'Current password is incorrect',
-            });
-        }
-
-        console.log('✅ Password verified, hashing new password...');
-
-        const hashedPassword = await bcrypt.hash(newPassword, 10);
-        await userCollection.updateOne(
-            query,
-            {
-                $set: {
-                    password: hashedPassword,
-                    updatedAt: new Date(),
-                },
-            }
-        );
-
-        console.log('✅ Password updated successfully');
+        // Use Better Auth's built-in changePassword
+        await auth.api.changePassword({
+            headers: req.headers,
+            body: {
+                currentPassword,
+                newPassword,
+            },
+        });
 
         res.json({
             success: true,
             message: 'Password updated successfully',
         });
-    } catch (error) {
+    } catch (error: any) {
         console.error('❌ Change password error:', error);
         res.status(500).json({
             success: false,
-            message: 'Failed to change password',
-            error: error instanceof Error ? error.message : 'Unknown error',
+            message: error.message || 'Failed to change password',
         });
     }
 });
 
 // =====================================================
-// 5. COMPLAINT ROUTES
+// 5. COMPLAINT ROUTES (all original routes)
 // =====================================================
 
 app.post('/api/complaints', async (req: Request, res: Response) => {
@@ -752,7 +698,7 @@ app.post('/api/complaints', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/complaints/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/complaints/consumer/:consumerId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -776,7 +722,7 @@ app.get('/api/complaints/consumer/:consumerId', async (req: Request, res: Respon
     }
 });
 
-app.get('/api/complaints/meter/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/complaints/meter/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -800,7 +746,7 @@ app.get('/api/complaints/meter/:meterNo', async (req: Request, res: Response) =>
     }
 });
 
-app.get('/api/complaints/all', async (req: Request, res: Response) => {
+app.get('/api/complaints/all', protect, authorize('admin', 'complaint_manager'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -841,7 +787,7 @@ app.get('/api/complaints/all', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/complaints/:id', async (req: Request, res: Response) => {
+app.get('/api/complaints/:id', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -878,7 +824,7 @@ app.get('/api/complaints/:id', async (req: Request, res: Response) => {
     }
 });
 
-app.patch('/api/complaints/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/complaints/:id/status', protect, authorize('admin', 'complaint_manager'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -930,7 +876,7 @@ app.patch('/api/complaints/:id/status', async (req: Request, res: Response) => {
     }
 });
 
-app.delete('/api/complaints/:id', async (req: Request, res: Response) => {
+app.delete('/api/complaints/:id', protect, authorize('admin', 'complaint_manager'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const complaintsCollection = db.collection('complaints');
@@ -959,7 +905,7 @@ app.delete('/api/complaints/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 6. CONNECTION APPLICATION ROUTES
+// 6. CONNECTION APPLICATION ROUTES (all original)
 // =====================================================
 
 app.post('/api/connection-applications', async (req: Request, res: Response) => {
@@ -1057,7 +1003,7 @@ app.post('/api/connection-applications', async (req: Request, res: Response) => 
     }
 });
 
-app.get('/api/connection-applications/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/consumer/:consumerId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1081,7 +1027,7 @@ app.get('/api/connection-applications/consumer/:consumerId', async (req: Request
     }
 });
 
-app.get('/api/connection-applications/all', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/all', protect, authorize('admin', 'xen', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1121,7 +1067,7 @@ app.get('/api/connection-applications/all', async (req: Request, res: Response) 
     }
 });
 
-app.get('/api/connection-applications/:id', async (req: Request, res: Response) => {
+app.get('/api/connection-applications/:id', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1158,7 +1104,7 @@ app.get('/api/connection-applications/:id', async (req: Request, res: Response) 
     }
 });
 
-app.patch('/api/connection-applications/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/connection-applications/:id/status', protect, authorize('admin', 'xen'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1206,7 +1152,7 @@ app.patch('/api/connection-applications/:id/status', async (req: Request, res: R
     }
 });
 
-app.patch('/api/connection-applications/:id/implement', async (req: Request, res: Response) => {
+app.patch('/api/connection-applications/:id/implement', protect, authorize('admin', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1271,7 +1217,7 @@ app.patch('/api/connection-applications/:id/implement', async (req: Request, res
     }
 });
 
-app.delete('/api/connection-applications/:id', async (req: Request, res: Response) => {
+app.delete('/api/connection-applications/:id', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1300,10 +1246,10 @@ app.delete('/api/connection-applications/:id', async (req: Request, res: Respons
 });
 
 // =====================================================
-// 7. CONNECTION WING ROUTES
+// 7. CONNECTION WING ROUTES (all original)
 // =====================================================
 
-app.get('/api/connection-wing/applications', async (req: Request, res: Response) => {
+app.get('/api/connection-wing/applications', protect, authorize('admin', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1328,7 +1274,7 @@ app.get('/api/connection-wing/applications', async (req: Request, res: Response)
     }
 });
 
-app.patch('/api/connection-wing/applications/:id/status', async (req: Request, res: Response) => {
+app.patch('/api/connection-wing/applications/:id/status', protect, authorize('admin', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1388,9 +1334,9 @@ app.patch('/api/connection-wing/applications/:id/status', async (req: Request, r
 });
 
 // =====================================================
-// ASSIGN METER TO APPLICATION
+// ASSIGN METER TO APPLICATION (connection wing)
 // =====================================================
-app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Request, res: Response) => {
+app.post('/api/connection-wing/applications/:id/assign-meter', protect, authorize('admin', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applicationsCollection = db.collection('connection_applications');
@@ -1556,10 +1502,10 @@ app.post('/api/connection-wing/applications/:id/assign-meter', async (req: Reque
 });
 
 // =====================================================
-// 8. METER ROUTES
+// 8. METER ROUTES (all original)
 // =====================================================
 
-app.get('/api/meters/all', async (req: Request, res: Response) => {
+app.get('/api/meters/all', protect, authorize('admin', 'billing_wings', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
@@ -1644,7 +1590,7 @@ app.get('/api/meters/all', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-assignment/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const { meterNo } = req.params;
@@ -1712,7 +1658,7 @@ app.get('/api/meters/check-assignment/:meterNo', async (req: Request, res: Respo
     }
 });
 
-app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-availability/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
@@ -1770,7 +1716,7 @@ app.get('/api/meters/check-availability/:meterNo', async (req: Request, res: Res
     }
 });
 
-app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) => {
+app.post('/api/connection-wing/add-meter', protect, authorize('admin', 'connection_wing'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
 
@@ -1854,7 +1800,7 @@ app.post('/api/connection-wing/add-meter', async (req: Request, res: Response) =
     }
 });
 
-app.get('/api/meters/available', async (req: Request, res: Response) => {
+app.get('/api/meters/available', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
@@ -1880,7 +1826,7 @@ app.get('/api/meters/available', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/search/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
@@ -1936,14 +1882,14 @@ app.get('/api/meters/search/:meterNo', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/meters/check-availability-for-user/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
         const consumersCollection = db.collection('consumers');
         const userCollection = db.collection('user');
         const { meterNo } = req.params;
-        const userId = req.query.userId as string;
+        const userId = req.query.userId as string || req.user?.id;
 
         console.log(`🔍 Checking meter availability for user: ${meterNo}, userId: ${userId}`);
 
@@ -2015,7 +1961,7 @@ app.get('/api/meters/check-availability-for-user/:meterNo', async (req: Request,
     }
 });
 
-app.post('/api/meters/claim', async (req: Request, res: Response) => {
+app.post('/api/meters/claim', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const metersCollection = db.collection('meters');
@@ -2097,7 +2043,7 @@ app.post('/api/meters/claim', async (req: Request, res: Response) => {
     }
 });
 
-app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) => {
+app.post('/api/meters/claim-for-consumer', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -2234,7 +2180,7 @@ app.post('/api/meters/claim-for-consumer', async (req: Request, res: Response) =
     }
 });
 
-app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
+app.patch('/api/user/primary-meter', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -2306,7 +2252,7 @@ app.patch('/api/user/primary-meter', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
+app.get('/api/user/meters/:userId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -2355,7 +2301,7 @@ app.get('/api/user/meters/:userId', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/consumers/status/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -2389,7 +2335,7 @@ app.get('/api/consumers/status/:meterNo', async (req: Request, res: Response) =>
     }
 });
 
-app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
+app.get('/api/consumers/check-unique', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -2460,10 +2406,10 @@ app.get('/api/consumers/check-unique', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 9. BILLING WINGS ROUTES
+// 9. BILLING WINGS ROUTES (all original)
 // =====================================================
 
-app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/all', protect, authorize('admin', 'billing_wings'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
@@ -2507,7 +2453,7 @@ app.get('/api/billing/bills/all', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/consumer/:consumerId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
@@ -2531,7 +2477,7 @@ app.get('/api/billing/bills/consumer/:consumerId', async (req: Request, res: Res
     }
 });
 
-app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/meter/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
@@ -2555,7 +2501,7 @@ app.get('/api/billing/bills/meter/:meterNo', async (req: Request, res: Response)
     }
 });
 
-app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
+app.get('/api/billing/bills/:billId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
@@ -2583,7 +2529,7 @@ app.get('/api/billing/bills/:billId', async (req: Request, res: Response) => {
     }
 });
 
-app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) => {
+app.patch('/api/billing/bills/:billId/pay', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const billsCollection = db.collection('bills');
@@ -2629,7 +2575,7 @@ app.patch('/api/billing/bills/:billId/pay', async (req: Request, res: Response) 
 // =====================================================
 // GENERATE BILL
 // =====================================================
-app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
+app.post('/api/billing/generate-bill', protect, authorize('admin', 'billing_wings'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
 
@@ -2841,10 +2787,10 @@ app.post('/api/billing/generate-bill', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 10. CONSUMER ROUTES (Billing)
+// 10. CONSUMER ROUTES (Billing) - all original
 // =====================================================
 
-app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/all', protect, authorize('admin', 'billing_wings'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -2898,7 +2844,7 @@ app.get('/api/billing/consumers/all', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/:consumerId', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -2932,7 +2878,7 @@ app.get('/api/billing/consumers/:consumerId', async (req: Request, res: Response
     }
 });
 
-app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.put('/api/billing/consumers/:consumerId', protect, authorize('admin', 'billing_wings'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -3026,7 +2972,7 @@ app.put('/api/billing/consumers/:consumerId', async (req: Request, res: Response
     }
 });
 
-app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Response) => {
+app.delete('/api/billing/consumers/:consumerId', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -3067,7 +3013,7 @@ app.delete('/api/billing/consumers/:consumerId', async (req: Request, res: Respo
     }
 });
 
-app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: Response) => {
+app.get('/api/billing/consumers/:consumerId/summary', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const consumersCollection = db.collection('consumers');
@@ -3122,10 +3068,10 @@ app.get('/api/billing/consumers/:consumerId/summary', async (req: Request, res: 
 });
 
 // =====================================================
-// 11. ADMIN USER MANAGEMENT ROUTES
+// 11. ADMIN USER MANAGEMENT ROUTES (all original)
 // =====================================================
 
-app.get('/api/admin/users', async (req: Request, res: Response) => {
+app.get('/api/admin/users', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3151,7 +3097,7 @@ app.get('/api/admin/users', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.get('/api/admin/users/:userId', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3180,7 +3126,7 @@ app.get('/api/admin/users/:userId', async (req: Request, res: Response) => {
     }
 });
 
-app.patch('/api/admin/users/:userId/status', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/:userId/status', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3229,7 +3175,7 @@ app.patch('/api/admin/users/:userId/status', async (req: Request, res: Response)
     }
 });
 
-app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/:userId/role', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3286,7 +3232,7 @@ app.patch('/api/admin/users/:userId/role', async (req: Request, res: Response) =
     }
 });
 
-app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.put('/api/admin/users/:userId', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3365,7 +3311,7 @@ app.put('/api/admin/users/:userId', async (req: Request, res: Response) => {
     }
 });
 
-app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
+app.delete('/api/admin/users/:userId', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3420,7 +3366,7 @@ app.delete('/api/admin/users/:userId', async (req: Request, res: Response) => {
     }
 });
 
-app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
+app.patch('/api/admin/users/bulk', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3468,7 +3414,7 @@ app.patch('/api/admin/users/bulk', async (req: Request, res: Response) => {
     }
 });
 
-app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
+app.delete('/api/admin/users/bulk', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3538,7 +3484,7 @@ app.delete('/api/admin/users/bulk', async (req: Request, res: Response) => {
     }
 });
 
-app.post('/api/admin/users', async (req: Request, res: Response) => {
+app.post('/api/admin/users', protect, authorize('admin'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const userCollection = db.collection('user');
@@ -3656,7 +3602,7 @@ app.post('/api/admin/users', async (req: Request, res: Response) => {
 // 12. CONSUMER BILLS
 // =====================================================
 
-app.get('/api/consumer/bills/:meterNo', async (req: Request, res: Response) => {
+app.get('/api/consumer/bills/:meterNo', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const { meterNo } = req.params;
@@ -3672,7 +3618,7 @@ app.get('/api/consumer/bills/:meterNo', async (req: Request, res: Response) => {
 // 13. XEN ROUTES
 // =====================================================
 
-app.get('/api/xen/applications', async (req: Request, res: Response) => {
+app.get('/api/xen/applications', protect, authorize('admin', 'xen'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const applications = await db.collection('connection_applications').find({}).toArray();
@@ -3687,7 +3633,7 @@ app.get('/api/xen/applications', async (req: Request, res: Response) => {
 // 14. TRANSACTION ROUTES
 // =====================================================
 
-app.get('/api/transactions/all', async (req: Request, res: Response) => {
+app.get('/api/transactions/all', protect, authorize('admin', 'billing_wings'), async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const transactionsCollection = db.collection('transactions');
@@ -3728,7 +3674,7 @@ app.get('/api/transactions/all', async (req: Request, res: Response) => {
     }
 });
 
-app.get('/api/transactions/:id', async (req: Request, res: Response) => {
+app.get('/api/transactions/:id', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
         const transactionsCollection = db.collection('transactions');
@@ -3756,7 +3702,7 @@ app.get('/api/transactions/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 15. SUBSTATION ROUTES
+// 15. SUBSTATION ROUTES (public)
 // =====================================================
 
 app.get('/api/substations', async (req: Request, res: Response) => {
@@ -3815,10 +3761,10 @@ app.get('/api/substations/:id', async (req: Request, res: Response) => {
 });
 
 // =====================================================
-// 16. PAYMENT ROUTES
+// 16. PAYMENT ROUTES (with Stripe)
 // =====================================================
 
-app.post('/api/create-payment-session', async (req: Request, res: Response) => {
+app.post('/api/create-payment-session', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
 
@@ -3892,8 +3838,8 @@ app.post('/api/create-payment-session', async (req: Request, res: Response) => {
                 },
             ],
             mode: 'payment',
-            success_url: `${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/payment-success?session_id={CHECKOUT_SESSION_ID}&${paymentType}_id=${paymentId}`,
-            cancel_url: `${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/payment-cancel?${paymentType}_id=${paymentId}`,
+            success_url: `${CLIENT_URL}/dashboard/consumer/payment-success?session_id={CHECKOUT_SESSION_ID}&${paymentType}_id=${paymentId}`,
+            cancel_url: `${CLIENT_URL}/dashboard/consumer/payment-cancel?${paymentType}_id=${paymentId}`,
             metadata: {
                 ...metadata,
                 paymentType,
@@ -3972,7 +3918,7 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 console.log('✅ Transaction created for connection fee:', app_id);
             }
 
-            return res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-connections?payment=success`);
+            return res.redirect(`${CLIENT_URL}/dashboard/consumer/my-connections?payment=success`);
         }
 
         if (bill_id) {
@@ -4012,14 +3958,14 @@ app.get('/api/payment-success', async (req: Request, res: Response) => {
                 console.log('✅ Transaction created for bill payment:', bill_id);
             }
 
-            return res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-bills?payment=success`);
+            return res.redirect(`${CLIENT_URL}/dashboard/consumer/my-bills?payment=success`);
         }
 
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer`);
+        res.redirect(`${CLIENT_URL}/dashboard/consumer`);
 
     } catch (error) {
         console.error('Payment success error:', error);
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer?payment=failed`);
+        res.redirect(`${CLIENT_URL}/dashboard/consumer?payment=failed`);
     }
 });
 
@@ -4028,15 +3974,15 @@ app.get('/api/payment-cancel', async (req: Request, res: Response) => {
     console.log('❌ Payment cancelled:', { app_id, bill_id });
 
     if (app_id) {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-connections?payment=cancelled`);
+        res.redirect(`${CLIENT_URL}/dashboard/consumer/my-connections?payment=cancelled`);
     } else if (bill_id) {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer/my-bills?payment=cancelled`);
+        res.redirect(`${CLIENT_URL}/dashboard/consumer/my-bills?payment=cancelled`);
     } else {
-        res.redirect(`${process.env.BETTER_AUTH_URL || 'https://wzpdcl-server.vercel.app'}/dashboard/consumer`);
+        res.redirect(`${CLIENT_URL}/dashboard/consumer`);
     }
 });
 
-app.post('/api/payment-verify', async (req: Request, res: Response) => {
+app.post('/api/payment-verify', protect, async (req: AuthRequest, res: Response) => {
     try {
         await connectDB();
 
